@@ -1,17 +1,12 @@
 import pandas as pd
 import os
 import re
-"""
+
 # Find the data folder relative to this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 RAW_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '../data'))
 CLEANED_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '../cleaned_data'))
-"""
-
-# Correct the path to the cleaned data folder
-CLEANED_DATA_PATH = "/Users/talya/Desktop/movie_recommendation - Kopya/cleaned_data"
-RAW_DATA_PATH = "/Users/talya/Desktop/movie_recommendation - Kopya/data"
 os.makedirs(CLEANED_DATA_PATH, exist_ok=True)
 """
 # --- 1. Clean movies.csv ---
