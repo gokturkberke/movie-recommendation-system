@@ -110,7 +110,3 @@ print("tags_clean.csv saved.")
 
 print("Preprocessing complete. Cleaned files are in the 'cleaned_data' folder.")
 
-import pandas as pd
-movies = pd.read_csv('/Users/talya/Desktop/movie_recommendation - Kopya/cleaned_data/movies_clean.csv')
-print("NaN Değerler (Movies):")
-print(movies[movies['title'].isna() | movies['genres'].isna()])
