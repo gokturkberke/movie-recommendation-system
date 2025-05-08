@@ -147,16 +147,60 @@ def recommend_by_watched_genres(watched_titles, movies, top_n=10):
     if not watched_titles:
         return pd.DataFrame()
 
-    base_titles = [title.lower().strip() for title in watched_titles]
+    # Extract genres from watched movies to recommend similar movies
+    all_genres = set()
+    watched_movies_df = pd.DataFrame()
     
-    filtered = movies[movies['title'].apply(
-        lambda title: any(base_title in title for base_title in base_titles)
-    )][['title_original', 'genres_original']].drop_duplicates()
+    # Find the exact watched movies and collect their genres
+    for title in watched_titles:
+        # First try exact match
+        exact_matches = movies[movies['title'] == title]
+        if not exact_matches.empty:
+            watched_movies_df = pd.concat([watched_movies_df, exact_matches])
+            for genres in exact_matches['genres'].values:
+                all_genres.update(genres.split('|'))
     
-    filtered.columns = ['title', 'genres']
-    filtered = filtered[~filtered['title'].str.lower().isin(base_titles)]
+    # If we couldn't find any exact matches, try fuzzy matching
+    if watched_movies_df.empty:
+        base_titles = [title.lower().strip() for title in watched_titles]
+        for base_title in base_titles:
+            similar_movies = movies[movies['title'].str.lower().str.contains(base_title)]
+            if not similar_movies.empty:
+                watched_movies_df = pd.concat([watched_movies_df, similar_movies])
+                for genres in similar_movies['genres'].values:
+                    all_genres.update(genres.split('|'))
     
-    return filtered.head(top_n)
+    # If we have genres, recommend based on genres
+    if all_genres:
+        # Find movies with similar genres
+        genre_matches = movies[movies['genres'].apply(
+            lambda g: any(genre in g for genre in all_genres)
+        )]
+        
+        # Remove watched movies from recommendations
+        if not watched_movies_df.empty:
+            recommendations = genre_matches[~genre_matches['movieId'].isin(watched_movies_df['movieId'])]
+        else:
+            recommendations = genre_matches
+        
+        # If we have too few recommendations, broaden the search
+        if len(recommendations) < top_n:
+            # Include movies with at least one matching genre
+            more_recommendations = movies[movies['genres'].apply(
+                lambda g: any(genre in g for genre in all_genres)
+            )]
+            if not watched_movies_df.empty:
+                more_recommendations = more_recommendations[~more_recommendations['movieId'].isin(watched_movies_df['movieId'])]
+            recommendations = more_recommendations
+    else:
+        # If no genres found, just return some popular movies not in watched list
+        if not watched_movies_df.empty:
+            recommendations = movies[~movies['movieId'].isin(watched_movies_df['movieId'])]
+        else:
+            recommendations = movies
+    
+    # Return top N recommendations
+    return recommendations[['title', 'genres']].head(top_n).reset_index(drop=True)
 """
 def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
     # NaN değerleri güvenli şekilde temizle
