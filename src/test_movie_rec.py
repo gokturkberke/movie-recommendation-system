@@ -6,7 +6,11 @@ class TestMovieRecommendations(unittest.TestCase):
 
     def setUp(self):
         # Movies dosyasını yükler ve temizler
-        self.movies = pd.read_csv('/Users/talya/Desktop/movie_recommendation - Kopya/cleaned_data/movies_clean.csv')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cleaned_data_path = os.path.join(script_dir, '../cleaned_data/movies_clean.csv')
+
+        # Movies dosyasını yükler ve temizler
+        self.movies = pd.read_csv(cleaned_data_path)
         self.movies.dropna(subset=['title', 'genres'], inplace=True)  # Güvenli temizlik
         self.movies['title'] = self.movies['title'].fillna('').astype(str).str.strip()
         self.movies['genres'] = self.movies['genres'].fillna('').astype(str).str.strip()
