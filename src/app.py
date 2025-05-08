@@ -52,9 +52,12 @@ def get_tfidf_matrix(movies, tags):
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(movies['content'])
     return tfidf_matrix, tfidf, movies
-
+"""
 def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
     matches = movies[movies['title'].str.lower().str.contains(movie_title.lower())]
+    # NaN olanları kontrol ederek güvenli arama
+    matches = movies[movies['title'].fillna('').str.lower().str.contains(movie_title.lower(), na=False)]
+    
     if matches.empty:
         return pd.DataFrame(), None
     idx = matches.index[0]
@@ -62,7 +65,7 @@ def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10
     similar_indices = cosine_sim.argsort()[-top_n-1:-1][::-1]
     recommendations = movies.iloc[similar_indices][['title', 'genres']].reset_index(drop=True)
     return recommendations, matches.iloc[0]['title']
-
+"""
 @st.cache_data
 def create_sparse_user_item_matrix(ratings):
     user_mapper = {user_id: idx for idx, user_id in enumerate(ratings['userId'].unique())}
@@ -111,23 +114,103 @@ def recommend_by_mood(mood, movies, top_n=10):
 def pick_random_movie(movies):
     movie = movies.sample(n=1).iloc[0]
     return movie
-
+"""
 def recommend_by_watched_genres(watched_titles, movies, top_n=10):
     if not watched_titles:
         return pd.DataFrame()
-    watched_movies = movies[movies['title'].isin(watched_titles)]
-    all_genres = []
-    for genres in watched_movies['genres']:
-        all_genres.extend(genres.split('|'))
-    if not all_genres:
-        return pd.DataFrame()
-    most_common_genres = [genre for genre, _ in Counter(all_genres).most_common(2)]
-    mask = movies['genres'].apply(lambda g: any(genre in g for genre in most_common_genres))
-    filtered = movies[mask & ~movies['title'].isin(watched_titles)]
+    
+    # Orijinal başlıkları tutan bir kopya oluştur
+    original_movies = movies[['title', 'genres']].copy()
+
+    # İzlenen başlıkları küçük harfe çevir ve temizle
+    base_titles = [title.lower().strip() for title in watched_titles]
+    filtered = original_movies[original_movies['title'].str.lower().apply(
+        lambda title: any(base_title in title for base_title in base_titles)
+    )]
+
     if filtered.empty:
-        return pd.DataFrame()
-    recommendations = filtered.sample(n=min(top_n, len(filtered)), random_state=42)[['title', 'genres']].reset_index(drop=True)
+        print("No matching titles found. Recommending by genres...")
+        all_genres = set()
+        for title in watched_titles:
+            genres = movies[movies['title'].str.lower() == title.lower()]['genres'].values
+            if len(genres) > 0:
+                all_genres.update(genres[0].split('|'))
+        filtered = original_movies[original_movies['genres'].apply(lambda g: any(genre in g for genre in all_genres))]
+
+    # İzlenen filmleri öneri listesinden çıkar
+    filtered = filtered[~filtered['title'].str.lower().isin(base_titles)]
+    
+    recommendations = filtered.head(top_n)
     return recommendations
+"""
+def recommend_by_watched_genres(watched_titles, movies, top_n=10):
+    if not watched_titles:
+        return pd.DataFrame()
+
+    base_titles = [title.lower().strip() for title in watched_titles]
+    
+    filtered = movies[movies['title'].apply(
+        lambda title: any(base_title in title for base_title in base_titles)
+    )][['title_original', 'genres_original']].drop_duplicates()
+    
+    filtered.columns = ['title', 'genres']
+    filtered = filtered[~filtered['title'].str.lower().isin(base_titles)]
+    
+    return filtered.head(top_n)
+"""
+def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
+    # NaN değerleri güvenli şekilde temizle
+    movies = movies.dropna(subset=['title']).copy()
+    movies['title'] = movies['title'].fillna('').astype(str).str.lower()
+
+    if not movie_title:
+        return pd.DataFrame(), None
+
+    # Kullanıcı başlığını küçük harfe çevir ve boşlukları temizle
+    movie_title = movie_title.lower().strip()
+
+    # NaN olmayan ve başlıkla eşleşen filmleri filtrele
+    matches = movies[movies['title'].str.contains(movie_title, na=False, case=False)]
+    
+    if matches.empty:
+        return pd.DataFrame(), None
+    
+    idx = matches.index[0]
+    cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
+    similar_indices = cosine_sim.argsort()[-top_n-1:-1][::-1]
+    recommendations = movies.iloc[similar_indices][['title', 'genres']].reset_index(drop=True)
+    return recommendations, matches.iloc[0]['title']
+"""
+def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
+    # Ensure you're dropping NaN values from the correct columns
+    movies = movies.dropna(subset=['title', 'genres']).copy()
+    
+    # If the movie title is empty, return an empty DataFrame
+    if not movie_title:
+        return pd.DataFrame(), None
+
+    # Normalize the title input
+    movie_title = movie_title.lower().strip()
+
+    # Filter movies by matching the title (case insensitive)
+    matches = movies[movies['title'].str.contains(movie_title, na=False, case=False)]
+    
+    if matches.empty:
+        return pd.DataFrame(), None
+
+    # Get the index of the first matched movie
+    idx = matches.index[0]
+    
+    # Calculate cosine similarity between the matched movie and all other movies
+    cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
+    
+    # Get the top N most similar movies
+    similar_indices = cosine_sim.argsort()[-top_n-1:-1][::-1]
+    
+    # Prepare the recommendations
+    recommendations = movies.iloc[similar_indices][['title', 'genres']].reset_index(drop=True)
+    
+    return recommendations, matches.iloc[0]['title']
 
 def show_table(df):
     if not df.empty:
