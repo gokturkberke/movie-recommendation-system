@@ -1,4 +1,5 @@
 import unittest
+import os
 import pandas as pd
 from app import recommend_by_watched_genres  # Öneri fonksiyonunun bulunduğu dosya
 
