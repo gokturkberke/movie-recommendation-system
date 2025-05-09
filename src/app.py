@@ -37,11 +37,11 @@ def clean_text(text):
         return ""
     text = str(text)
     # Remove year in parentheses (e.g., "(1995)") if present
-    text = re.sub(r'\\s*\\(\\d{4}\')', '', text)
+    text = re.sub(r'\s*\(\d{4}\)', '', text)
     # Remove special characters, keep alphanumeric and spaces
-    text = re.sub(r'[^a-zA-Z0-9\\s]', '', text)
-    text = text.lower()
-    text = re.sub(r'\\s+', ' ', text).strip() # Normalize whitespace
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    # Normalize whitespace (replace multiple spaces with a single space and strip)
+    text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def get_tfidf_matrix(movies, tags):

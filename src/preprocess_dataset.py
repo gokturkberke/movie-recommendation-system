@@ -51,20 +51,27 @@ movies['title'] = movies['title'].fillna('').astype(str).str.strip()
 movies['genres'] = movies['genres'].fillna('').astype(str).str.strip()
 
 # Clean title (remove non-alphanumeric characters except spaces and year)
-def clean_title_original_format(title): # Renamed to avoid conflict
-    return re.sub(r'[^a-zA-Z0-9\\s\\(\\)]', '', title)
+def clean_title_original_format(title):
+    if pd.isnull(title):
+        return ""
+    title = str(title)
+    # Remove year from title, e.g., " (1995)"
+    title = re.sub(r'\s*\(\d{4}\)', '', title)
+    # Remove special characters except parentheses for original format
+    title = re.sub(r'[^a-zA-Z0-9\s()]', '', title) # Keep parentheses
+    title = re.sub(r'\s+', ' ', title).strip() # Remove extra spaces
+    return title
 
 # Define a comprehensive text cleaning function for matching and TF-IDF
 def clean_text_for_matching(text):
     if pd.isnull(text):
         return ""
-    text = str(text)
-    # Remove year in parentheses (e.g., "(1995)") if present
-    text = re.sub(r'\\s*\\(\\d{4}\\)', '', text)
-    # Remove special characters, keep alphanumeric and spaces
-    text = re.sub(r'[^a-zA-Z0-9\\s]', '', text)
-    text = text.lower()
-    text = re.sub(r'\\s+', ' ', text).strip() # Normalize whitespace
+    text = str(text).lower()
+    # Remove year from title, e.g., " (1995)"
+    text = re.sub(r'\s*\(\d{4}\)', '', text)
+    # Remove all non-alphanumeric characters (except spaces)
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    text = re.sub(r'\s+', ' ', text).strip() # Remove extra spaces
     return text
 
 # Orijinal başlığı ve türü sakla
