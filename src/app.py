@@ -91,12 +91,12 @@ def create_sparse_user_item_matrix(ratings):
                                 shape=(len(user_mapper), len(movie_mapper)))
     return ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper
 
-def get_user_recommendations(user_id, ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper, movies, ratings, top_n=10):
+def get_user_recommendations(user_id, model_knn, ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper, movies, ratings, top_n=10):
     if user_id not in user_mapper:
         return pd.DataFrame()
     user_idx = user_mapper[user_id]
-    model_knn = NearestNeighbors(metric='cosine', algorithm='brute')
-    model_knn.fit(ratings_matrix)
+    # model_knn = NearestNeighbors(metric='cosine', algorithm='brute') # Removed
+    # model_knn.fit(ratings_matrix) # Removed
     distances, indices = model_knn.kneighbors(ratings_matrix[user_idx], n_neighbors=6)
     similar_users = indices.flatten()[1:]
     user_rated = set(ratings_matrix[user_idx].nonzero()[1])
@@ -286,6 +286,10 @@ def main():
     tfidf_matrix, tfidf, movies_with_tags = get_tfidf_matrix(movies.copy(), tags.copy())
     ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper = create_sparse_user_item_matrix(ratings)
 
+    # Fit k-NN model for collaborative filtering once
+    model_knn_collaborative = NearestNeighbors(metric='cosine', algorithm='brute')
+    model_knn_collaborative.fit(ratings_matrix)
+
     if 'watched_movies' not in st.session_state:
         st.session_state['watched_movies'] = set()
 
@@ -316,7 +320,7 @@ def main():
         st.success("**Collaborative Filtering Recommendation**")
         user_id = st.number_input("Enter your userId:", min_value=1, step=1)
         if st.button("Get Collaborative Recommendations"):
-            recs = get_user_recommendations(int(user_id), ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper, movies, ratings, top_n=10)
+            recs = get_user_recommendations(int(user_id), model_knn_collaborative, ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper, movies, ratings, top_n=10)
             if not recs.empty:
                 with st.expander("See Recommendations"):
                     show_table(recs)
