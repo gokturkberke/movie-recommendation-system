@@ -31,24 +31,35 @@ def load_ratings(data_path='cleaned_data'):
 def load_tags(data_path='cleaned_data'):
     return pd.read_csv(os.path.join(data_path, 'tags_clean.csv'))
 
-def clean_text(s):
-    if pd.isnull(s):
+# Centralized text cleaning function (consistent with preprocess_dataset.py)
+def clean_text(text):
+    if pd.isnull(text):
         return ""
-    s = re.sub(r"\(\d{4}\)", "", s)
-    s = re.sub(r"[^\w\s]", " ", s)
-    s = s.lower()
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+    text = str(text)
+    # Remove year in parentheses (e.g., "(1995)") if present
+    text = re.sub(r'\\s*\\(\\d{4}\')', '', text)
+    # Remove special characters, keep alphanumeric and spaces
+    text = re.sub(r'[^a-zA-Z0-9\\s]', '', text)
+    text = text.lower()
+    text = re.sub(r'\\s+', ' ', text).strip() # Normalize whitespace
+    return text
 
 def get_tfidf_matrix(movies, tags):
-    tags['tag'] = tags['tag'].fillna('').apply(clean_text)
+    tags['tag'] = tags['tag'].fillna('').apply(clean_text) # Use centralized clean_text
     tags = tags.drop_duplicates(subset=['movieId', 'tag'])
     tags_grouped = tags.groupby('movieId')['tag'].apply(lambda x: ' '.join(x)).reset_index()
-    movies['title_clean'] = movies['title'].apply(clean_text)
-    movies['genres_clean'] = movies['genres'].str.replace('|', ' ').apply(clean_text)
+    
     movies = movies.merge(tags_grouped, on='movieId', how='left')
-    movies['tag'] = movies['tag'].fillna('')
-    movies['content'] = movies['title_clean'] + ' ' + movies['genres_clean'] + ' ' + movies['tag']
+    
+    # Ensure all components of 'content' are strings and NaNs are explicitly handled
+    movies['title_for_matching'] = movies['title_for_matching'].fillna('').astype(str)
+    movies['genres_for_matching'] = movies['genres_for_matching'].fillna('').astype(str)
+    movies['tag'] = movies['tag'].fillna('').astype(str) # Ensure tags are also strings
+    
+    movies['content'] = movies['title_for_matching'] + ' ' + movies['genres_for_matching'] + ' ' + movies['tag']
+    # Final check for NaNs in the content column itself, though previous steps should prevent this
+    movies['content'] = movies['content'].fillna('')
+    
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(movies['content'])
     return tfidf_matrix, tfidf, movies
@@ -74,7 +85,9 @@ def create_sparse_user_item_matrix(ratings):
     movie_inv_mapper = {v: k for k, v in movie_mapper.items()}
     user_index = [user_mapper[i] for i in ratings['userId']]
     movie_index = [movie_mapper[i] for i in ratings['movieId']]
-    ratings_matrix = csr_matrix((ratings['rating'], (user_index, movie_index)), 
+    
+    # Use 'rating_z' (normalized ratings) instead of 'rating'
+    ratings_matrix = csr_matrix((ratings['rating_z'], (user_index, movie_index)), 
                                 shape=(len(user_mapper), len(movie_mapper)))
     return ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper
 

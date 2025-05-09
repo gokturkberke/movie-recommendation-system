@@ -8,7 +8,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RAW_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '../data'))
 CLEANED_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '../cleaned_data'))
 os.makedirs(CLEANED_DATA_PATH, exist_ok=True)
-"""
+r"""
 # --- 1. Clean movies.csv ---
 movies = pd.read_csv(os.path.join(RAW_DATA_PATH, 'movies.csv'))
 
@@ -51,16 +51,44 @@ movies['title'] = movies['title'].fillna('').astype(str).str.strip()
 movies['genres'] = movies['genres'].fillna('').astype(str).str.strip()
 
 # Clean title (remove non-alphanumeric characters except spaces and year)
-def clean_title(title):
-    return re.sub(r'[^a-zA-Z0-9\s\(\)]', '', title)
+def clean_title_original_format(title): # Renamed to avoid conflict
+    return re.sub(r'[^a-zA-Z0-9\\s\\(\\)]', '', title)
+
+# Define a comprehensive text cleaning function for matching and TF-IDF
+def clean_text_for_matching(text):
+    if pd.isnull(text):
+        return ""
+    text = str(text)
+    # Remove year in parentheses (e.g., "(1995)") if present
+    text = re.sub(r'\\s*\\(\\d{4}\\)', '', text)
+    # Remove special characters, keep alphanumeric and spaces
+    text = re.sub(r'[^a-zA-Z0-9\\s]', '', text)
+    text = text.lower()
+    text = re.sub(r'\\s+', ' ', text).strip() # Normalize whitespace
+    return text
 
 # Orijinal başlığı ve türü sakla
 movies['title_original'] = movies['title']
 movies['genres_original'] = movies['genres']
 
-# Küçük harfli kopyalar sadece arama ve eşleşme için
-movies['title'] = movies['title'].apply(lambda x: clean_title(x).lower())
-movies['genres'] = movies['genres'].str.lower()
+# Apply specific cleaning for display/original format title
+movies['title'] = movies['title_original'].apply(clean_title_original_format)
+
+# Create cleaned versions for matching/TF-IDF
+movies['title_for_matching'] = movies['title_original'].apply(clean_text_for_matching)
+movies['genres_for_matching'] = movies['genres_original'].apply(lambda x: clean_text_for_matching(x.replace('|', ' ')))
+
+
+# Multi-hot encode genres from 'genres_original'
+# Ensure 'genres_original' is string and not NaN before splitting
+movies['genres_original_list'] = movies['genres_original'].fillna('').astype(str).str.split('|')
+all_genres = set(g for sublist in movies['genres_original_list'] for g in sublist if g) # Collect all unique genres
+
+for genre in sorted(list(all_genres)): # Sorted for consistent column order
+    if genre: # Ensure genre is not an empty string
+        movies[f'genre_{clean_text_for_matching(genre)}'] = movies['genres_original_list'].apply(lambda x: 1 if genre in x else 0)
+
+movies = movies.drop(columns=['genres_original_list']) # Clean up temporary column
 
 # Save cleaned file
 movies.to_csv(os.path.join(CLEANED_DATA_PATH, 'movies_clean.csv'), index=False)
