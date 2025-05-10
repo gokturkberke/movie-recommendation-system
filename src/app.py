@@ -6,7 +6,8 @@ from collections import Counter
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
-from sklearn.neighbors import NearestNeighbors
+from surprise import dump # Ensure this import is present
+from thefuzz import fuzz
 
 MOOD_GENRE_MAP = {
     "happy": ["Comedy", "Family", "Animation", "Romance"],
@@ -26,6 +27,31 @@ def load_movies(data_path='cleaned_data'):
 @st.cache_data
 def load_ratings(data_path='cleaned_data'):
     return pd.read_csv(os.path.join(data_path, 'ratings_clean.csv'))
+
+@st.cache_resource # Model gibi kaynaklar için cache_resource daha uygun
+def load_trained_surprise_model(model_filename="svd_trained_model.pkl"):
+    # app.py'nin bulunduğu dizin (src)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # cleaned_data klasörünün yolu (src'nin bir üst dizininde)
+    cleaned_data_dir = os.path.join(script_dir, '..', 'cleaned_data')
+    model_path = os.path.join(cleaned_data_dir, model_filename)
+
+    print(f"Önceden eğitilmiş Surprise modeli yükleniyor: {model_path}")
+    if not os.path.exists(model_path):
+        st.error(f"HATA: Kayıtlı model dosyası bulunamadı: {model_path}. "
+                 f"Lütfen önce train_save_model.py script'ini çalıştırın.")
+        return None # Model yüklenemezse None döndür
+
+    try:
+        # dump.load() bir tuple döndürür: (predictions, algo)
+        # Biz sadece algo'yu (modeli) istiyoruz.
+        loaded_object = dump.load(model_path)
+        model = loaded_object[1] # Model (algo) tuple'ın ikinci elemanıdır
+        print("Önceden eğitilmiş model başarıyla yüklendi.")
+        return model
+    except Exception as e:
+        st.error(f"Model yüklenirken bir hata oluştu: {e}")
+        return None
 
 @st.cache_data
 def load_tags(data_path='cleaned_data'):
@@ -63,55 +89,39 @@ def get_tfidf_matrix(movies, tags):
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(movies['content'])
     return tfidf_matrix, tfidf, movies
-"""
-def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
-    matches = movies[movies['title'].str.lower().str.contains(movie_title.lower())]
-    # NaN olanları kontrol ederek güvenli arama
-    matches = movies[movies['title'].fillna('').str.lower().str.contains(movie_title.lower(), na=False)]
-    
-    if matches.empty:
-        return pd.DataFrame(), None
-    idx = matches.index[0]
-    cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
-    similar_indices = cosine_sim.argsort()[-top_n-1:-1][::-1]
-    recommendations = movies.iloc[similar_indices][['title', 'genres']].reset_index(drop=True)
-    return recommendations, matches.iloc[0]['title']
-"""
-@st.cache_data
-def create_sparse_user_item_matrix(ratings):
-    user_mapper = {user_id: idx for idx, user_id in enumerate(ratings['userId'].unique())}
-    movie_mapper = {movie_id: idx for idx, movie_id in enumerate(ratings['movieId'].unique())}
-    user_inv_mapper = {v: k for k, v in user_mapper.items()}
-    movie_inv_mapper = {v: k for k, v in movie_mapper.items()}
-    user_index = [user_mapper[i] for i in ratings['userId']]
-    movie_index = [movie_mapper[i] for i in ratings['movieId']]
-    
-    # Use 'rating_z' (normalized ratings) instead of 'rating'
-    ratings_matrix = csr_matrix((ratings['rating_z'], (user_index, movie_index)), 
-                                shape=(len(user_mapper), len(movie_mapper)))
-    return ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper
 
-def get_user_recommendations(user_id, model_knn, ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper, movies, ratings, top_n=10):
-    if user_id not in user_mapper:
-        return pd.DataFrame()
-    user_idx = user_mapper[user_id]
-    # model_knn = NearestNeighbors(metric='cosine', algorithm='brute') # Removed
-    # model_knn.fit(ratings_matrix) # Removed
-    distances, indices = model_knn.kneighbors(ratings_matrix[user_idx], n_neighbors=6)
-    similar_users = indices.flatten()[1:]
-    user_rated = set(ratings_matrix[user_idx].nonzero()[1])
-    rec_scores = {}
-    for sim_user_idx in similar_users:
-        sim_user_ratings = ratings_matrix[sim_user_idx].toarray().flatten()
-        for movie_idx, rating in enumerate(sim_user_ratings):
-            if rating > 0 and movie_idx not in user_rated:
-                rec_scores[movie_idx] = rec_scores.get(movie_idx, 0) + rating
-    if not rec_scores:
-        return pd.DataFrame()
-    top_movies = sorted(rec_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
-    movie_ids = [movie_inv_mapper[movie_idx] for movie_idx, _ in top_movies]
-    recommended_movies = movies[movies['movieId'].isin(movie_ids)][['title', 'genres']].reset_index(drop=True)
-    return recommended_movies
+def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, top_n=10):
+    """
+    Generates movie recommendations for a user using a trained Surprise model.
+    """
+    # Get a list of all movie IDs
+    all_movie_ids = movies_df['movieId'].unique()
+    
+    # Get a list of movies already rated by the user
+    user_rated_movie_ids = ratings_df[ratings_df['userId'] == user_id]['movieId'].unique()
+    
+    # Predict ratings for movies not yet rated by the user
+    predictions = []
+    for movie_id in all_movie_ids:
+        if movie_id not in user_rated_movie_ids:
+            # Surprise model's predict method returns a Prediction object
+            # uid (user id), iid (item id), r_ui (true rating), est (estimated rating), details
+            pred = surprise_model.predict(uid=user_id, iid=movie_id)
+            predictions.append((movie_id, pred.est))
+            
+    # Sort predictions by estimated rating in descending order
+    predictions.sort(key=lambda x: x[1], reverse=True)
+    
+    # Get the top N movie IDs
+    top_movie_ids = [movie_id for movie_id, score in predictions[:top_n]]
+    
+    # Get movie details for the recommended movies
+    recommended_movies = movies_df[movies_df['movieId'].isin(top_movie_ids)][['title', 'genres']]
+    
+    # To maintain the order of recommendations
+    recommended_movies = recommended_movies.set_index('movieId').loc[top_movie_ids].reset_index()
+    return recommended_movies[['title', 'genres']]
+
 
 def recommend_by_mood(mood, movies, top_n=10):
     genres = MOOD_GENRE_MAP.get(mood.lower())
@@ -157,47 +167,86 @@ def recommend_by_watched_genres(watched_titles, movies, top_n=10):
     return recommendations
 """
 # Helper functions for recommend_by_watched_genres
-def _extract_watched_movies_and_genres(watched_titles, movies_input_df):
+def _extract_watched_movies_and_genres(watched_titles, movies_input_df, similarity_threshold=85):
     all_genres = set()
-    final_watched_movies_df = pd.DataFrame()
-    # Work on a copy to avoid modifying the original DataFrame, especially if it's a slice
+    final_watched_movies_df_list = [] # Use a list to append DataFrames
+
     movies_df_copy = movies_input_df.copy()
 
     # 1. Attempt exact matches on original 'title'
-    list_of_exact_match_dfs = []
+    remaining_titles_for_fuzzy_match = list(watched_titles)
+    
+    # Ensure 'title' column is string type for exact matching
+    movies_df_copy['title'] = movies_df_copy['title'].astype(str)
+
     for title_query in watched_titles:
-        # Use movies_df_copy for consistent DataFrame source
-        exact_matches = movies_df_copy[movies_df_copy['title'] == title_query]
+        # Ensure title_query is a string
+        title_query_str = str(title_query)
+        exact_matches = movies_df_copy[movies_df_copy['title'] == title_query_str]
         if not exact_matches.empty:
-            list_of_exact_match_dfs.append(exact_matches)
+            final_watched_movies_df_list.append(exact_matches)
+            if title_query_str in remaining_titles_for_fuzzy_match:
+                remaining_titles_for_fuzzy_match.remove(title_query_str)
 
-    if list_of_exact_match_dfs:
-        temp_watched_df = pd.concat(list_of_exact_match_dfs)
-        final_watched_movies_df = temp_watched_df.drop_duplicates(subset=['movieId']).reset_index(drop=True)
-    else:
-        # 2. No exact matches, attempt fuzzy matches on cleaned titles against 'title_for_matching'
-        list_of_similar_match_dfs = []
-        # Clean user titles once
-        cleaned_user_titles = [clean_text(t).lower() for t in watched_titles if clean_text(t)]
+    # 2. For remaining titles, attempt fuzzy matches
+    if remaining_titles_for_fuzzy_match:
+        # Clean user titles once for fuzzy matching
+        cleaned_user_titles_for_fuzzy = [clean_text(t).lower() for t in remaining_titles_for_fuzzy_match if clean_text(t)]
 
-        # Ensure 'title_for_matching' exists and is suitable for matching
-        # It's assumed to be pre-cleaned and lowercased by preprocess_dataset.py
-        if 'title_for_matching' in movies_df_copy.columns:
-            for cleaned_title_query in cleaned_user_titles:
-                if not cleaned_title_query: continue # Skip empty strings after cleaning
-                # Match on the 'title_for_matching' column
-                similar_movies_matches = movies_df_copy[movies_df_copy['title_for_matching'].str.contains(cleaned_title_query, na=False)]
-                if not similar_movies_matches.empty:
-                    list_of_similar_match_dfs.append(similar_movies_matches)
+        # Ensure 'title_for_matching' exists and prepare it for fuzzy matching
+        if 'title_for_matching' in movies_df_copy.columns and cleaned_user_titles_for_fuzzy:
+            movies_df_copy['title_for_matching_fuzzy'] = movies_df_copy['title_for_matching'].fillna('').astype(str).apply(lambda x: clean_text(x).lower())
+            
+            # To keep track of movieIds already added by exact or previous fuzzy matches
+            # Initialize with movieIds from exact matches if any
+            already_added_movie_ids = set()
+            if final_watched_movies_df_list:
+                temp_df_exact = pd.concat(final_watched_movies_df_list)
+                if not temp_df_exact.empty and 'movieId' in temp_df_exact.columns:
+                    already_added_movie_ids.update(temp_df_exact['movieId'].unique())
+
+
+            for cleaned_title_query in cleaned_user_titles_for_fuzzy:
+                if not cleaned_title_query: continue
+                
+                best_match_score = 0
+                best_match_index = -1
+                
+                # Iterate through movies to find the best fuzzy match for the current cleaned_title_query
+                for index, row in movies_df_copy.iterrows():
+                    # Skip if this movie's ID was already added
+                    if 'movieId' in row and row['movieId'] in already_added_movie_ids:
+                        continue
+
+                    # Use fuzz.partial_ratio for flexibility
+                    score = fuzz.partial_ratio(cleaned_title_query, row['title_for_matching_fuzzy'])
+                    
+                    if score > best_match_score:
+                        best_match_score = score
+                        best_match_index = index
+                
+                # If a good enough match is found and not already added
+                if best_match_score >= similarity_threshold and best_match_index != -1:
+                    matched_movie_id = movies_df_copy.loc[best_match_index, 'movieId']
+                    if matched_movie_id not in already_added_movie_ids:
+                        final_watched_movies_df_list.append(movies_df_copy.loc[[best_match_index]])
+                        already_added_movie_ids.add(matched_movie_id)
         
-        if list_of_similar_match_dfs:
-            temp_watched_df = pd.concat(list_of_similar_match_dfs)
-            final_watched_movies_df = temp_watched_df.drop_duplicates(subset=['movieId']).reset_index(drop=True)
+    # Consolidate and remove duplicates based on movieId
+    if not final_watched_movies_df_list:
+        final_watched_movies_df = pd.DataFrame()
+    else:
+        final_watched_movies_df = pd.concat(final_watched_movies_df_list)
+        if not final_watched_movies_df.empty and 'movieId' in final_watched_movies_df.columns:
+            final_watched_movies_df = final_watched_movies_df.drop_duplicates(subset=['movieId']).reset_index(drop=True)
+        else: # Handle case where movieId might be missing or df is empty after concat
+            final_watched_movies_df = pd.DataFrame()
+
 
     # 3. Extract genres from the identified watched movies
-    if not final_watched_movies_df.empty:
-        for genres_str in final_watched_movies_df['genres'].dropna().values: # Ensure NaNs in genres are skipped
-            all_genres.update(genres_str.split('|'))
+    if not final_watched_movies_df.empty and 'genres' in final_watched_movies_df.columns:
+        for genres_str in final_watched_movies_df['genres'].dropna().values: 
+            all_genres.update(str(genres_str).split('|')) # Ensure genres_str is string
             
     return final_watched_movies_df, all_genres
 
@@ -333,16 +382,32 @@ def show_table(df):
 def main():
     st.markdown("<h1 style='color:#1976d2;'>🎬 Movie Recommendation System</h1>", unsafe_allow_html=True)
     st.sidebar.markdown("## 📋 Menu")
-    movies = load_movies()
-    ratings = load_ratings()
-    tags = load_tags()
-    tfidf_matrix, tfidf, movies_with_tags = get_tfidf_matrix(movies.copy(), tags.copy())
-    ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper = create_sparse_user_item_matrix(ratings)
 
-    # Fit k-NN model for collaborative filtering once
-    model_knn_collaborative = NearestNeighbors(metric='cosine', algorithm='brute')
-    model_knn_collaborative.fit(ratings_matrix)
+    # Verileri yükle
+    base_dir_for_data = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    cleaned_data_path_in_app = os.path.join(base_dir_for_data, 'cleaned_data')
 
+    movies = load_movies(data_path=cleaned_data_path_in_app)
+    ratings = load_ratings(data_path=cleaned_data_path_in_app)
+    tags = load_tags(data_path=cleaned_data_path_in_app)
+
+    if movies.empty: # veya diğer DataFrame'ler için de kontrol
+        st.error("Film verisi yüklenemedi. Uygulama devam edemiyor.")
+        st.stop()
+    if ratings.empty:
+        st.error("Reyting verisi yüklenemedi. Uygulama devam edemiyor.")
+        st.stop()
+
+
+    tfidf_matrix, tfidf_vectorizer, movies_with_tags = get_tfidf_matrix(movies.copy(), tags.copy())
+
+    # YENİ KOD: Kayıtlı modeli yükle
+    surprise_model = load_trained_surprise_model() 
+
+    if surprise_model is None:
+        # Eğer model yüklenemediyse, kullanıcıya bilgi ver ve belki CF özelliğini devre dışı bırak
+        st.warning("İşbirlikçi filtreleme modeli yüklenemedi. Bu özellik kullanılamayabilir.")
+    
     if 'watched_movies' not in st.session_state:
         st.session_state['watched_movies'] = set()
 
@@ -371,16 +436,23 @@ def main():
 
     elif choice == menu[1]:
         st.success("**Collaborative Filtering Recommendation**")
-        user_id = st.number_input("Enter your userId:", min_value=1, step=1)
+        user_id_input = st.number_input("Enter your userId:", min_value=1, step=1, value=1)
         if st.button("Get Collaborative Recommendations"):
-            recs = get_user_recommendations(int(user_id), model_knn_collaborative, ratings_matrix, user_mapper, movie_mapper, user_inv_mapper, movie_inv_mapper, movies, ratings, top_n=10)
-            if not recs.empty:
-                with st.expander("See Recommendations"):
-                    show_table(recs)
+            if surprise_model is not None: # Modelin yüklendiğinden emin ol
+                if user_id_input:
+                    user_id = int(user_id_input)
+                    # Ensure ratings is passed if get_user_recommendations needs it
+                    recs = get_user_recommendations(user_id, surprise_model, movies, ratings, top_n=10) 
+                    if not recs.empty:
+                        with st.expander("See Recommendations"):
+                            show_table(recs)
+                    else:
+                        st.warning("Bu kullanıcı için öneri bulunamadı. Kullanıcı ID'sini kontrol edin veya kullanıcı tüm filmleri oylamış olabilir.")
+                else:
+                    st.warning("Lütfen bir Kullanıcı ID'si girin.")
             else:
-                st.warning("No recommendations found. Check the user ID.")
-
-    elif choice == menu[2]:
+                st.error("İşbirlikçi filtreleme modeli şu anda kullanılamıyor.")
+    elif choice == menu[2]: # Mood-Based Recommendation
         st.success("**Mood-Based Recommendation**")
         mood = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys()))
         if st.button("Get Mood-Based Recommendations"):
