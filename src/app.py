@@ -90,6 +90,11 @@ def clean_text(text):
     return text
 
 def get_tfidf_matrix(movies, tags):
+    if movies.empty:
+        st.warning("Movies DataFrame is empty. Cannot generate TF-IDF matrix for content-based recommendations.")
+        # Return None for matrix and vectorizer, and the original (empty) movies DataFrame
+        return None, None, movies
+
     tags['tag'] = tags['tag'].fillna('').apply(clean_text) # Use centralized clean_text
     tags = tags.drop_duplicates(subset=['movieId', 'tag'])
     tags_grouped = tags.groupby('movieId')['tag'].apply(lambda x: ' '.join(x)).reset_index()
@@ -107,9 +112,16 @@ def get_tfidf_matrix(movies, tags):
     
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(movies['content'])
-    return tfidf_matrix, tfidf, movies
 
-def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, top_n=10):
+    # Additional check: if no features were learned (e.g., all content was stop words or empty)
+    if tfidf_matrix.shape[1] == 0:
+        st.warning("No features were learned from movie content for TF-IDF. Content-based recommendations might be ineffective.")
+        # Depending on desired behavior, could also return None, None, movies here
+        # For now, proceeding with the matrix but warning the user.
+
+    return tfidf_matrix, tfidf, movies # movies here is movies_with_tags
+
+def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, watched_titles, top_n=10):
     """
     Generates movie recommendations for a user using a trained Surprise model.
     """
@@ -410,21 +422,28 @@ def main():
     ratings = load_ratings(data_path=cleaned_data_path_in_app)
     tags = load_tags(data_path=cleaned_data_path_in_app)
 
-    if movies.empty: # veya diğer DataFrame'ler için de kontrol
+    if movies.empty:
         st.error("Film verisi yüklenemedi. Uygulama devam edemiyor.")
         st.stop()
-    if ratings.empty:
-        st.error("Reyting verisi yüklenemedi. Uygulama devam edemiyor.")
-        st.stop()
+    if ratings.empty: # Assuming ratings are crucial for some parts, though not all.
+        st.warning("Reyting verisi yüklenemedi. İşbirlikçi filtreleme gibi bazı özellikler çalışmayabilir.")
+        # Do not st.stop() here if other features can work without ratings.
+        # However, if collaborative filtering is selected and ratings are empty, it should be handled there.
 
-
+    # Generate TF-IDF matrix and related components
     tfidf_matrix, tfidf_vectorizer, movies_with_tags = get_tfidf_matrix(movies.copy(), tags.copy())
 
-    # YENİ KOD: Kayıtlı modeli yükle
-    surprise_model = load_trained_surprise_model() 
+    # Check if TF-IDF matrix generation was successful for content-based features
+    content_based_enabled = tfidf_matrix is not None and tfidf_vectorizer is not None and not movies_with_tags.empty
+    if not content_based_enabled:
+        st.warning(
+            "TF-IDF matrix and related components could not be generated (e.g., due to empty movie data). "
+            "Content-based recommendations will be disabled."
+        )
+
+    surprise_model = load_trained_surprise_model()
 
     if surprise_model is None:
-        # Eğer model yüklenemediyse, kullanıcıya bilgi ver ve belki CF özelliğini devre dışı bırak
         st.warning("İşbirlikçi filtreleme modeli yüklenemedi. Bu özellik kullanılamayabilir.")
     
     if 'watched_movies' not in st.session_state:
@@ -440,18 +459,28 @@ def main():
     ]
     choice = st.sidebar.radio("Choose a recommendation method:", menu)
 
-    if choice == menu[0]:
+    if choice == menu[0]: # Content-Based Recommendation
         st.success("**Content-Based Recommendation**")
-        movie_title = st.text_input("🎬 Enter a movie title you like (no need for year):")
-        if st.button("Get Recommendations"):
-            recs, matched_title = recommend_similar_movies_partial(movie_title, movies_with_tags, tfidf_matrix, top_n=10)
-            if matched_title:
-                st.info(f"Showing recommendations based on: **{matched_title}**")
-            if not recs.empty:
-                with st.expander("See Recommendations"):
-                    show_table(recs)
-            else:
-                st.warning("No recommendations found. Try a different title.")
+        if not content_based_enabled:
+            st.error("Content-based recommendation is currently unavailable due to issues in data processing (e.g., TF-IDF matrix generation failed or movie data is empty).")
+        else:
+            movie_title = st.text_input("🎬 Enter a movie title you like (no need for year):")
+            if st.button("Get Recommendations"):
+                # Ensure movies_with_tags is passed as it was used for TF-IDF
+                recs, matched_title = recommend_similar_movies_partial(
+                    movie_title,
+                    movies_with_tags,
+                    tfidf_matrix,
+                    st.session_state.get('watched_movies', set()), # Pass watched movies
+                    top_n=10
+                )
+                if matched_title:
+                    st.info(f"Showing recommendations based on: **{matched_title}**")
+                if not recs.empty:
+                    with st.expander("See Recommendations"):
+                        show_table(recs)
+                else:
+                    st.warning("No recommendations found. Try a different title.")
 
     elif choice == menu[1]:
         st.success("**Collaborative Filtering Recommendation**")
@@ -460,8 +489,14 @@ def main():
             if surprise_model is not None: # Modelin yüklendiğinden emin ol
                 if user_id_input:
                     user_id = int(user_id_input)
-                    # Ensure ratings is passed if get_user_recommendations needs it
-                    recs = get_user_recommendations(user_id, surprise_model, movies, ratings, top_n=10) 
+                    recs = get_user_recommendations(
+                        user_id,
+                        surprise_model,
+                        movies,
+                        ratings,
+                        st.session_state.get('watched_movies', set()), # Pass watched movies
+                        top_n=10
+                    )
                     if not recs.empty:
                         with st.expander("See Recommendations"):
                             show_table(recs)
@@ -475,7 +510,12 @@ def main():
         st.success("**Mood-Based Recommendation**")
         mood = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys()))
         if st.button("Get Mood-Based Recommendations"):
-            recs = recommend_by_mood(mood, movies, top_n=10)
+            recs = recommend_by_mood(
+                mood,
+                movies,
+                st.session_state.get('watched_movies', set()), # Pass watched movies
+                top_n=10
+            )
             if not recs.empty:
                 with st.expander("See Recommendations"):
                     show_table(recs)
