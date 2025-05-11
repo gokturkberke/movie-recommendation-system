@@ -8,6 +8,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
 from surprise import dump # Ensure this import is present
 from thefuzz import fuzz
+import requests # Added requests import
+
+# TMDB API Key
+TMDB_API_KEY = "d4dd76aa404d680766dbacc0e83552bd"
 
 MOOD_GENRE_MAP = {
     "happy": ["Comedy", "Family", "Animation", "Romance"],
@@ -19,6 +23,52 @@ MOOD_GENRE_MAP = {
     "thoughtful": ["Documentary", "Drama"],
     "surprised": ["Mystery", "Thriller"],
 }
+
+@st.cache_data # API çağrılarını önbelleğe almak için
+def get_movie_details_from_tmdb(tmdb_id, api_key):
+    """
+    Verilen TMDB ID'si için film detaylarını (özellikle poster yolunu) TMDB API'sinden çeker.
+    """
+    if pd.isna(tmdb_id): # Eğer tmdb_id NaN ise boş string döndür veya None
+        return None
+
+    # TMDB API'sinin film detayları için temel URL'si
+    # Dökümantasyon: https://developer.themoviedb.org/reference/movie-details
+    api_url = f"https://api.themoviedb.org/3/movie/{int(tmdb_id)}?api_key={api_key}&language=en-US"
+
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status() # HTTP_STATUS_CODE 200 değilse hata fırlatır (4xx, 5xx)
+        data = response.json()
+
+        poster_path = data.get('poster_path')
+        overview = data.get('overview', '') # Özeti de alalım, belki sonra kullanırız
+        title = data.get('title', '') # TMDB'deki başlığı da alabiliriz
+
+        if poster_path:
+            # Posterlerin tam URL'sini oluşturmak için temel resim URL'si
+            # Farklı boyutlar için 'w500' kısmını değiştirebilirsin (örn: 'w200', 'w300', 'original')
+            full_poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+            return {
+                "poster_url": full_poster_url,
+                "overview": overview,
+                "tmdb_title": title
+            }
+        else:
+            return { # Poster olmasa bile diğer bilgileri döndürebiliriz
+                "poster_url": None,
+                "overview": overview,
+                "tmdb_title": title
+            }
+
+    except requests.exceptions.RequestException as e:
+        print(f"TMDB API isteği sırasında hata (tmdb_id: {tmdb_id}): {e}")
+        # Consider logging this to Streamlit if running in that environment
+        # st.warning(f"Film detayları (ID: {tmdb_id}) TMDB'den alınırken bir sorun oluştu.")
+        return None # Hata durumunda None döndür
+    except Exception as e:
+        print(f"Film detayı işlenirken beklenmedik hata (tmdb_id: {tmdb_id}): {e}")
+        return None
 
 @st.cache_data
 def load_cleaned_data(filename, data_path='cleaned_data'):
@@ -125,12 +175,12 @@ def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, wat
     """
     Generates movie recommendations for a user using a trained Surprise model.
     Filters out movies the user has already rated and movies in the watched_titles list.
+    Returns movieId, title, genres, and tmdbId if available.
     """
     all_movie_ids = movies_df['movieId'].unique()
     user_rated_movie_ids = ratings_df[ratings_df['userId'] == user_id]['movieId'].unique()
 
     predictions = []
-    # Consider only movies not yet rated by the user for prediction
     unrated_movie_ids = [mid for mid in all_movie_ids if mid not in user_rated_movie_ids]
 
     for movie_id in unrated_movie_ids:
@@ -139,18 +189,18 @@ def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, wat
             
     predictions.sort(key=lambda x: x[1], reverse=True)
     
-    # Fetch more candidates initially to account for filtering watched_titles later
-    # Buffer is added to increase chances of getting top_n results
     num_candidates_to_fetch = top_n + (len(watched_titles) if watched_titles else 0) + 10 
-    
     candidate_movie_ids_ordered = [movie_id for movie_id, score in predictions[:num_candidates_to_fetch]]
     
-    if not candidate_movie_ids_ordered: # No predictions or all rated
-        return pd.DataFrame(columns=['title', 'genres'])
+    cols_to_return = ['movieId', 'title', 'genres']
+    if 'tmdbId' in movies_df.columns:
+        cols_to_return.append('tmdbId')
+    
+    if not candidate_movie_ids_ordered:
+        return pd.DataFrame(columns=cols_to_return)
 
-    # Get movie details for the candidates
-    # Ensure we only try to fetch details for existing movieIds
-    recommended_movies_df = movies_df[movies_df['movieId'].isin(candidate_movie_ids_ordered)].copy()
+    # Get movie details for the candidates, ensuring all necessary columns are selected
+    recommended_movies_df = movies_df[movies_df['movieId'].isin(candidate_movie_ids_ordered)][cols_to_return].copy()
     
     # Filter out watched movies by title from the candidates
     if watched_titles and not recommended_movies_df.empty:
@@ -158,43 +208,58 @@ def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, wat
 
     # Re-order the filtered candidates based on original prediction score and select top_n
     if not recommended_movies_df.empty:
-        # Filter candidate_movie_ids_ordered to only those that are still in recommended_movies_df after watched_filter
+        # Filter candidate_movie_ids_ordered to only those that are still in recommended_movies_df
         final_candidate_ids_in_order = [
             mid for mid in candidate_movie_ids_ordered 
             if mid in recommended_movies_df['movieId'].values
         ]
         if final_candidate_ids_in_order:
+            # Set index to movieId to use .loc for reordering, then reset index
+            # Ensure all cols_to_return are present after reordering
             recommended_movies_df = recommended_movies_df.set_index('movieId').loc[final_candidate_ids_in_order].reset_index()
-        else: # All candidates were filtered out by watched_titles or didn't exist in movies_df
-             recommended_movies_df = pd.DataFrame(columns=['title', 'genres', 'movieId'])
-    # else: recommended_movies_df is already empty or became empty after watched_titles filter
+            # Double check columns, though loc should preserve them if they were in recommended_movies_df
+            for col in cols_to_return:
+                if col not in recommended_movies_df.columns:
+                     recommended_movies_df[col] = pd.NA # Should not happen if cols_to_return used for selection
+        else: # All candidates were filtered out or didn't exist
+             recommended_movies_df = pd.DataFrame(columns=cols_to_return)
+    else: # recommended_movies_df is already empty or became empty after watched_titles filter
+        recommended_movies_df = pd.DataFrame(columns=cols_to_return)
         
-    return recommended_movies_df[['title', 'genres']].head(top_n)
+    return recommended_movies_df[cols_to_return].head(top_n)
 
 
 def recommend_by_mood(mood, movies, watched_movies, top_n=10):
-    genres = MOOD_GENRE_MAP.get(mood.lower())
-    if not genres:
-        return pd.DataFrame()
+    """
+    Recommends movies based on mood, filtering watched movies.
+    Returns movieId, title, genres, and tmdbId if available.
+    """
+    genres_for_mood = MOOD_GENRE_MAP.get(mood.lower()) # Renamed variable for clarity
+    
+    cols_to_return = ['movieId', 'title', 'genres']
+    if 'tmdbId' in movies.columns:
+        cols_to_return.append('tmdbId')
+
+    if not genres_for_mood:
+        return pd.DataFrame(columns=cols_to_return)
 
     movies_copy = movies.copy()
-    # Ensure 'genres' column is string type before applying string operations
-    movies_copy['genres'] = movies_copy['genres'].astype(str)
+    movies_copy['genres'] = movies_copy['genres'].astype(str) # Ensure genres is string
     
-    mask = movies_copy['genres'].apply(lambda g: any(genre in g for genre in genres))
+    mask = movies_copy['genres'].apply(lambda g: any(genre_item in g for genre_item in genres_for_mood))
     filtered_movies = movies_copy[mask]
     
     if filtered_movies.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols_to_return)
     
     # Determine how many movies to sample initially
-    # Sample more to account for filtering watched_movies, but not more than available. Add a small buffer.
     num_to_sample = min(top_n + (len(watched_movies) if watched_movies else 0) + 5, len(filtered_movies))
 
-    if num_to_sample <= 0: # If no movies to sample from (e.g., filtered_movies is small and watched_movies is large)
-        return pd.DataFrame(columns=['title', 'genres'])
+    if num_to_sample <= 0:
+        return pd.DataFrame(columns=cols_to_return)
         
-    recommendations = filtered_movies.sample(n=num_to_sample, random_state=42)[['title', 'genres']]
+    # Sample and select the required columns
+    recommendations = filtered_movies.sample(n=num_to_sample, random_state=42)[cols_to_return].copy() # Ensure copy
     
     # Filter out watched movies
     if watched_movies and not recommendations.empty:
@@ -203,38 +268,8 @@ def recommend_by_mood(mood, movies, watched_movies, top_n=10):
     return recommendations.head(top_n).reset_index(drop=True)
 
 def pick_random_movie(movies):
-    movie = movies.sample(n=1).iloc[0]
-    return movie
-"""
-def recommend_by_watched_genres(watched_titles, movies, top_n=10):
-    if not watched_titles:
-        return pd.DataFrame()
-    
-    # Orijinal başlıkları tutan bir kopya oluştur
-    original_movies = movies[['title', 'genres']].copy()
+    return movies.sample(n=1).iloc[0]
 
-    # İzlenen başlıkları küçük harfe çevir ve temizle
-    base_titles = [title.lower().strip() for title in watched_titles]
-    filtered = original_movies[original_movies['title'].str.lower().apply(
-        lambda title: any(base_title in title for base_title in base_titles)
-    )]
-
-    if filtered.empty:
-        print("No matching titles found. Recommending by genres...")
-        all_genres = set()
-        for title in watched_titles:
-            genres = movies[movies['title'].str.lower() == title.lower()]['genres'].values
-            if len(genres) > 0:
-                all_genres.update(genres[0].split('|'))
-        filtered = original_movies[original_movies['genres'].apply(lambda g: any(genre in g for genre in all_genres))]
-
-    # İzlenen filmleri öneri listesinden çıkar
-    filtered = filtered[~filtered['title'].str.lower().isin(base_titles)]
-    
-    recommendations = filtered.head(top_n)
-    return recommendations
-"""
-# Helper functions for recommend_by_watched_genres
 def _extract_watched_movies_and_genres(watched_titles, movies_input_df, similarity_threshold=85):
     all_genres = set()
     final_watched_movies_df_list = [] # Use a list to append DataFrames
@@ -319,121 +354,186 @@ def _extract_watched_movies_and_genres(watched_titles, movies_input_df, similari
     return final_watched_movies_df, all_genres
 
 def _get_genre_based_recommendations(movies_df, all_genres_set, watched_movie_ids, top_n):
+    """
+    Helper to get recommendations based on a set of genres, excluding watched movies.
+    Returns movieId, title, genres, and tmdbId if available.
+    """
+    cols_to_return = ['movieId', 'title', 'genres']
+    if 'tmdbId' in movies_df.columns:
+        cols_to_return.append('tmdbId')
+
     if not all_genres_set:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols_to_return)
 
     # Find movies with at least one matching genre
-    # Ensure 'genres' column is string and handle potential errors if a genre is not string
     genre_matches = movies_df[movies_df['genres'].apply(
         lambda g: isinstance(g, str) and any(genre_item in g.split('|') for genre_item in all_genres_set)
     )]
 
-    recommendations = genre_matches
+    recommendations = genre_matches.copy() # Work on a copy
     # Remove watched movies from recommendations
+    # Ensure watched_movie_ids is a Series or similar iterable for isin
     if watched_movie_ids is not None and not watched_movie_ids.empty:
-        recommendations = genre_matches[~genre_matches['movieId'].isin(watched_movie_ids)]
+        recommendations = recommendations[~recommendations['movieId'].isin(watched_movie_ids)]
     
     if recommendations.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols_to_return)
 
-    # Return top N or fewer if less are available
     num_to_return = min(top_n, len(recommendations))
-    return recommendations[['title', 'genres']].head(num_to_return).reset_index(drop=True)
+    return recommendations[cols_to_return].head(num_to_return).reset_index(drop=True)
 
 def _get_fallback_recommendations(movies_df, watched_movie_ids, top_n):
-    recommendations_pool = movies_df
+    """
+    Helper to get fallback (random) recommendations, excluding watched movies.
+    Returns movieId, title, genres, and tmdbId if available.
+    """
+    cols_to_return = ['movieId', 'title', 'genres']
+    if 'tmdbId' in movies_df.columns:
+        cols_to_return.append('tmdbId')
+
+    recommendations_pool = movies_df.copy() # Work on a copy
     if watched_movie_ids is not None and not watched_movie_ids.empty:
-        recommendations_pool = movies_df[~movies_df['movieId'].isin(watched_movie_ids)]
+        recommendations_pool = recommendations_pool[~recommendations_pool['movieId'].isin(watched_movie_ids)]
     
     if recommendations_pool.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols_to_return)
         
-    # Sample safely
     num_to_sample = min(top_n, len(recommendations_pool))
-    # Use random_state for reproducibility if desired, e.g., random_state=42
-    return recommendations_pool[['title', 'genres']].sample(n=num_to_sample, random_state=42).reset_index(drop=True)
+    # Ensure sampling is done on the correct columns
+    return recommendations_pool[cols_to_return].sample(n=num_to_sample, random_state=42).reset_index(drop=True)
 
 def recommend_by_watched_genres(watched_titles, movies, top_n=10):
-    if not watched_titles:
-        return pd.DataFrame()
+    """
+    Recommends movies based on genres of watched titles.
+    Returns movieId, title, genres, and tmdbId if available.
+    """
+    final_cols = ['movieId', 'title', 'genres']
+    if 'tmdbId' in movies.columns:
+        final_cols.append('tmdbId')
+
+    if not watched_titles: # No titles, no recommendations
+        return pd.DataFrame(columns=final_cols)
 
     # Step 1: Extract watched movies and their genres
-    watched_movies_df, all_genres = _extract_watched_movies_and_genres(watched_titles, movies)
+    # _extract_watched_movies_and_genres uses 'movies' (which has tmdbId)
+    # and should ideally preserve tmdbId in watched_movies_df if present.
+    watched_movies_df, all_genres = _extract_watched_movies_and_genres(watched_titles, movies.copy()) 
     
     # Step 2: Get IDs of watched movies for exclusion
-    # Ensure watched_movie_ids is a Series, even if empty, for consistent type handling
-    watched_movie_ids = watched_movies_df['movieId'] if not watched_movies_df.empty else pd.Series(dtype='int64')
+    watched_movie_ids = pd.Series(dtype='int64') # Default to empty Series
+    if not watched_movies_df.empty and 'movieId' in watched_movies_df.columns:
+        watched_movie_ids = watched_movies_df['movieId']
 
-    recommendations = pd.DataFrame()
+
+    recommendations = pd.DataFrame(columns=final_cols) # Initialize with final_cols
     # Step 3: Try to get recommendations based on genres
     if all_genres:
+        # Pass 'movies' which has tmdbId to helper
         recommendations = _get_genre_based_recommendations(movies, all_genres, watched_movie_ids, top_n)
     
-    # Step 4: If no recommendations from genres (or all_genres was empty), get fallback recommendations
+    # Step 4: If no recommendations from genres (or all_genres was empty), get fallback
     if recommendations.empty:
+        # Pass 'movies' which has tmdbId to helper
         recommendations = _get_fallback_recommendations(movies, watched_movie_ids, top_n)
             
-    # Step 5: Ensure final result is not more than top_n and has a clean index
-    return recommendations.head(top_n).reset_index(drop=True)
+    # Step 5: Ensure final result is not more than top_n and has a clean index and correct columns
+    if recommendations.empty: # If still empty, return empty DF with correct columns
+        return pd.DataFrame(columns=final_cols)
+
+    # Ensure all final_cols are in recommendations, add if missing
+    for col in final_cols:
+        if col not in recommendations.columns:
+            recommendations[col] = pd.NA 
+
+    return recommendations[final_cols].head(top_n).reset_index(drop=True)
 
 def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, watched_movies, top_n=10):
     # movies argument is movies_with_tags, which was used to build tfidf_matrix
-    movies_df = movies.copy() 
-    # Ensure 'title_for_matching' (used for finding the input movie) is string and handles NaNs
-    movies_df['title_for_matching'] = movies_df['title_for_matching'].fillna('').astype(str)
+    # Define columns to return, ensuring 'tmdbId' is included if available in the input 'movies' DataFrame
+    cols_to_return = ['movieId', 'title', 'genres']
+    if 'tmdbId' in movies.columns: # Check against the 'movies' df passed in (movies_with_tags)
+        cols_to_return.append('tmdbId')
 
-    # Validate movie_title input
+    if movies.empty or tfidf_matrix is None:
+        return pd.DataFrame(columns=cols_to_return), None
+
+    movies_df = movies.copy() # Work on a copy
+
+    # Ensure 'title_for_matching' is present and correctly formatted for robust matching
+    if 'title_for_matching' not in movies_df.columns or movies_df['title_for_matching'].isnull().all():
+        movies_df['title_for_matching'] = movies_df['title'].fillna('').apply(clean_text).str.lower()
+    else:
+        # Ensure it's string type and fill NaNs if it somehow exists but has them
+        movies_df['title_for_matching'] = movies_df['title_for_matching'].fillna('').astype(str)
+
+
     if not movie_title or not movie_title.strip():
-        # st.warning("Please enter a movie title for content-based recommendations.") # Handled in main
-        return pd.DataFrame(), None
+        return pd.DataFrame(columns=cols_to_return), None
 
     cleaned_movie_title = clean_text(movie_title).lower()
-    if not cleaned_movie_title: # If cleaning results in an empty string
-        # st.warning("Could not process the entered movie title.") # Handled in main
-        return pd.DataFrame(), None
+    if not cleaned_movie_title: 
+        return pd.DataFrame(columns=cols_to_return), None
 
     # Find matches for the input movie title using the cleaned 'title_for_matching' column
     matches = movies_df[movies_df['title_for_matching'].str.contains(cleaned_movie_title, na=False)]
     if matches.empty:
-        # st.warning(f"No movie found matching '{movie_title}'.") # Handled in main
-        return pd.DataFrame(), None
+        return pd.DataFrame(columns=cols_to_return), None
 
     # idx is the index in the original DataFrame (movies_with_tags) from which tfidf_matrix was built
+    # It's crucial that 'movies' (which is movies_with_tags) has a consistent index with tfidf_matrix
     idx = matches.index[0] 
-    matched_movie_original_title = matches.iloc[0]['title'] # Get the display title of the matched movie
+    matched_movie_original_title = movies_df.loc[idx, 'title'] # Get the display title of the matched movie
         
     # Calculate cosine similarity
     cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
     
-    # Determine number of candidates to fetch: top_n + watched_count + buffer
-    num_candidates_to_fetch = top_n + (len(watched_movies) if watched_movies else 0) + 5
+    # Determine number of candidates to fetch: top_n + watched_count + a buffer
+    num_watched = len(watched_movies) if watched_movies else 0
+    num_candidates_to_fetch = top_n + num_watched + 10 # Buffer for filtering
     
     # Number of other movies available for recommendation (excluding the movie itself)
     num_available_others = len(cosine_sim) - 1
+
     if num_available_others <= 0:
-        return pd.DataFrame(columns=['title', 'genres']), matched_movie_original_title
+        return pd.DataFrame(columns=cols_to_return), matched_movie_original_title
 
-    # Fetch at most num_available_others
+    # Fetch at most num_available_others if num_candidates_to_fetch is too large
     actual_k_to_fetch = min(num_candidates_to_fetch, num_available_others)
-    if actual_k_to_fetch <= 0:
-        return pd.DataFrame(columns=['title', 'genres']), matched_movie_original_title
+    if actual_k_to_fetch <= 0: # Should not happen if num_available_others > 0, but as a safeguard
+        return pd.DataFrame(columns=cols_to_return), matched_movie_original_title
 
-    # Get indices of the (actual_k_to_fetch) most similar movies, excluding the movie itself.
-    # argsort()[-1] is the movie itself (highest similarity). We want others.
-    similar_indices = cosine_sim.argsort()[-(actual_k_to_fetch + 1):-1][::-1]
+    # Get indices of the (actual_k_to_fetch) most similar movies, EXCLUDING the movie itself.
+    # argsort gives indices from lowest to highest similarity. We take the top `actual_k_to_fetch + 1`
+    # (to include the movie itself if it's among the most similar to its own vector, which it will be),
+    # then reverse for highest-to-lowest, then filter out `idx`.
+    similar_indices_with_self = cosine_sim.argsort()[-(actual_k_to_fetch + 1):][::-1] 
+    similar_indices = [sim_idx for sim_idx in similar_indices_with_self if sim_idx != idx]
+    # Ensure we still have enough candidates after removing self, or take all available if less than actual_k_to_fetch
+    similar_indices = similar_indices[:actual_k_to_fetch]
 
-    if not similar_indices.size: # No similar movies found (should be caught by actual_k_to_fetch <=0)
-        return pd.DataFrame(columns=['title', 'genres']), matched_movie_original_title
+
+    if not similar_indices: # No other similar movies found after excluding self
+        return pd.DataFrame(columns=cols_to_return), matched_movie_original_title
     
     # Retrieve recommendations using .iloc on the original 'movies' (movies_with_tags) DataFrame
-    recommendations = movies.iloc[similar_indices][['title', 'genres']].copy() # Use .copy() to avoid SettingWithCopyWarning later if needed
+    # This ensures we use the correct indices that align with the tfidf_matrix
+    recommendations = movies.iloc[similar_indices][cols_to_return].copy()
+    # Add similarity scores for sorting, then drop after filtering and top_n selection
+    recommendations['similarity_score'] = cosine_sim[similar_indices]
     
     # Filter out watched movies from the recommendations
     if watched_movies and not recommendations.empty:
-        recommendations = recommendations[~recommendations['title'].isin(watched_movies)]
+        # Make sure 'title' column exists before trying to filter
+        if 'title' in recommendations.columns:
+            recommendations = recommendations[~recommendations['title'].isin(watched_movies)]
         
-    # Return top_n recommendations and the title of the movie they were based on
-    return recommendations.head(top_n).reset_index(drop=True), matched_movie_original_title
+    # Sort by similarity score (descending), take top_n, drop score column, and reset index
+    # This re-sort is important if watched movies were filtered out, to ensure we get the highest similarity
+    # among the remaining ones.
+    final_recommendations = recommendations.sort_values(by='similarity_score', ascending=False)
+    final_recommendations = final_recommendations.drop(columns=['similarity_score'])
+    
+    return final_recommendations.head(top_n).reset_index(drop=True), matched_movie_original_title
 
 def show_table(df):
     if not df.empty:
@@ -455,6 +555,24 @@ def main():
     ratings = load_ratings(data_path=cleaned_data_path_in_app)
     tags = load_tags(data_path=cleaned_data_path_in_app)
 
+    links_file_path = os.path.join(base_dir_for_data, 'data', 'links.csv') # data klasöründe olduğunu varsayıyoruz
+    try:
+        links_df = pd.read_csv(links_file_path)
+        if links_df.empty:
+            st.warning("Warning: links.csv is empty. Poster functionality might be affected.")
+        # tmdbId sütunundaki NaN olmayan değerleri integer yapalım, API fonksiyonu int bekliyor.
+        links_df = links_df[pd.notna(links_df['tmdbId'])].copy() # Önce NaN olanları atalım
+        if not links_df.empty: # Check if links_df is not empty after dropping NaNs
+            links_df['tmdbId'] = links_df['tmdbId'].astype(int)
+
+    except FileNotFoundError:
+        st.error(f"ERROR: links.csv not found at {links_file_path}. Poster functionality will be disabled.")
+        links_df = pd.DataFrame(columns=['movieId', 'tmdbId']) # Hata durumunda boş DataFrame
+    except Exception as e:
+        st.error(f"ERROR: An unexpected error occurred while loading links.csv: {e}")
+        links_df = pd.DataFrame(columns=['movieId', 'tmdbId']) # Hata durumunda boş DataFrame
+
+
     if movies.empty:
         st.error("Film verisi yüklenemedi. Uygulama devam edemiyor.")
         st.stop()
@@ -465,6 +583,14 @@ def main():
 
     # Generate TF-IDF matrix and related components
     tfidf_matrix, tfidf_vectorizer, movies_with_tags = get_tfidf_matrix(movies.copy(), tags.copy())
+
+    # movies DataFrame'ine tmdbId'leri ekleyelim (merge edelim)
+    if not movies.empty and not links_df.empty and 'tmdbId' in links_df.columns:
+        movies = movies.merge(links_df[['movieId', 'tmdbId']], on='movieId', how='left')
+    # Eğer içerik tabanlı önerilerde kullandığın movies_with_tags için de tmdbId gerekiyorsa:
+    if not movies_with_tags.empty and not links_df.empty and 'tmdbId' in links_df.columns:
+        movies_with_tags = movies_with_tags.merge(links_df[['movieId', 'tmdbId']], on='movieId', how='left')
+
 
     # Check if TF-IDF matrix generation was successful for content-based features
     content_based_enabled = tfidf_matrix is not None and tfidf_vectorizer is not None and not movies_with_tags.empty
@@ -481,6 +607,8 @@ def main():
     
     if 'watched_movies' not in st.session_state:
         st.session_state['watched_movies'] = set()
+    if 'add_selected_movies_multiselect' not in st.session_state: # Key for the new multiselect
+        st.session_state.add_selected_movies_multiselect = []
 
     menu = [
         "🎯 Content-Based Recommendation",
@@ -502,108 +630,350 @@ def main():
                 if not movie_title.strip():
                     st.warning("Please enter a movie title.")
                 else:
-                    recs, matched_title = recommend_similar_movies_partial(
+                    recs_df, matched_title = recommend_similar_movies_partial(
                         movie_title,
-                        movies_with_tags, # This is movies DataFrame with 'content' and 'title_for_matching'
+                        movies_with_tags, # This DataFrame should have 'movieId' and 'tmdbId'
                         tfidf_matrix,
-                        st.session_state.get('watched_movies', set()), # Pass watched movies
+                        st.session_state.get('watched_movies', set()),
                         top_n=10
                     )
                     if matched_title:
                         st.info(f"Showing recommendations based on: **{matched_title}**")
-                    if not recs.empty:
-                        with st.expander("See Recommendations"):
-                            show_table(recs)
+
+                    if not recs_df.empty:
+                        with st.expander("See Recommendations", expanded=True): # Genişletilmiş olarak başlasın
+                            if 'movieId' not in recs_df.columns and 'tmdbId' not in recs_df.columns:
+                                st.warning("Recommendation data is missing 'movieId' or 'tmdbId' for poster lookup.")
+                                # Fallback to old table display if essential IDs are missing
+                                temp_display_df = recs_df.copy()
+                                if 'title' not in temp_display_df.columns: temp_display_df['title'] = "N/A"
+                                if 'genres' not in temp_display_df.columns: temp_display_df['genres'] = "N/A"
+                                show_table(temp_display_df[['title', 'genres']])
+                            else:
+                                for index, row in recs_df.iterrows():
+                                    # Ensure 'title' and 'genres' exist to prevent KeyError
+                                    title_display = row.get('title', "Title not available")
+                                    genres_display = row.get('genres', "Genres not available")
+
+                                    st.subheader(f"{recs_df.index.get_loc(index) + 1}. {title_display}")
+                                    st.write(f"**Genres:** {genres_display}")
+
+                                    tmdb_id_to_fetch = None
+                                    # Prefer tmdbId directly from recs_df if available and valid
+                                    if 'tmdbId' in row and pd.notna(row['tmdbId']):
+                                        tmdb_id_to_fetch = int(row['tmdbId']) # Ensure it's int for the API
+                                    # Fallback: if tmdbId is not in recs_df or is NaN, try to find it using movieId from recs_df and links_df
+                                    elif 'movieId' in row and pd.notna(row['movieId']) and not links_df.empty:
+                                        link_info = links_df[links_df['movieId'] == row['movieId']]
+                                        if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
+                                            tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+
+                                    if tmdb_id_to_fetch:
+                                        # Ensure TMDB_API_KEY is defined and accessible here
+                                        # It should be defined globally or passed appropriately
+                                        movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
+                                        if movie_details and movie_details.get("poster_url"):
+                                            col1, col2 = st.columns([1, 3]) 
+                                            with col1:
+                                                st.image(movie_details["poster_url"], width=150) 
+                                            with col2:
+                                                if movie_details.get("overview"):
+                                                    st.caption(f"Overview: {movie_details['overview']}")
+                                                else:
+                                                    st.caption("Overview not available.") # More specific message
+                                        elif movie_details: # Details fetched but no poster
+                                            st.caption("Poster not found on TMDB.")
+                                            if movie_details.get("overview"):
+                                                    st.caption(f"Overview: {movie_details['overview']}")
+                                        else: # No details fetched at all
+                                            st.caption("Details (including poster) not found on TMDB.")
+                                    else:
+                                        st.caption("TMDB ID not found for this movie, so poster cannot be displayed.")
+                                    st.markdown("---") 
                     else:
                         st.warning("No recommendations found. Try a different title.")
 
-    elif choice == menu[1]:
+    elif choice == menu[1]: # Collaborative Filtering
         st.success("**Collaborative Filtering Recommendation**")
         user_id_input = st.number_input("Enter your userId:", min_value=1, step=1, value=1)
         if st.button("Get Collaborative Recommendations"):
             if surprise_model is not None: 
                 if user_id_input:
                     user_id = int(user_id_input)
-                    recs = get_user_recommendations(
+                    # movies DataFrame passed here should have tmdbId after merge in main
+                    recs_df = get_user_recommendations(
                         user_id,
                         surprise_model,
-                        movies, # Original movies DataFrame
+                        movies, 
                         ratings,
-                        st.session_state.get('watched_movies', set()), # Pass watched movies
+                        st.session_state.get('watched_movies', set()),
                         top_n=10
                     )
-                    if not recs.empty:
-                        with st.expander("See Recommendations"):
-                            show_table(recs) 
+                    if not recs_df.empty:
+                        with st.expander("See Recommendations", expanded=True):
+                            # Poster display logic adapted for this section
+                            if 'movieId' not in recs_df.columns and 'tmdbId' not in recs_df.columns:
+                                st.warning("Recommendation data is missing 'movieId' or 'tmdbId' for poster lookup.")
+                                temp_display_df = recs_df.copy()
+                                if 'title' not in temp_display_df.columns: temp_display_df['title'] = "N/A"
+                                if 'genres' not in temp_display_df.columns: temp_display_df['genres'] = "N/A"
+                                show_table(temp_display_df[['title', 'genres']]) # Fallback to simple table
+                            else:
+                                for index, row in recs_df.iterrows():
+                                    title_display = row.get('title', "Title not available")
+                                    genres_display = row.get('genres', "Genres not available")
+                                    st.subheader(f"{recs_df.index.get_loc(index) + 1}. {title_display}")
+                                    st.write(f"**Genres:** {genres_display}")
+
+                                    tmdb_id_to_fetch = None
+                                    if 'tmdbId' in row and pd.notna(row['tmdbId']):
+                                        tmdb_id_to_fetch = int(row['tmdbId'])
+                                    elif 'movieId' in row and pd.notna(row['movieId']) and not links_df.empty:
+                                        link_info = links_df[links_df['movieId'] == row['movieId']]
+                                        if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
+                                            tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+
+                                    if tmdb_id_to_fetch:
+                                        movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
+                                        if movie_details and movie_details.get("poster_url"):
+                                            col1, col2 = st.columns([1, 3])
+                                            with col1:
+                                                st.image(movie_details["poster_url"], width=150)
+                                            with col2:
+                                                if movie_details.get("overview"):
+                                                    st.caption(f"Overview: {movie_details['overview']}")
+                                                else:
+                                                    st.caption("Overview not available.")
+                                        elif movie_details:
+                                            st.caption("Poster not found on TMDB.")
+                                            if movie_details.get("overview"):
+                                                st.caption(f"Overview: {movie_details['overview']}")
+                                        else:
+                                            st.caption("Details (including poster) not found on TMDB.")
+                                    else:
+                                        st.caption("TMDB ID not found, poster cannot be displayed.")
+                                    st.markdown("---")
                     else:
                         st.warning("No recommendations found for this user. They might have rated all available movies, the user ID could be invalid, or all potential recommendations were already in your watch history.")
                 else:
                     st.warning("Lütfen bir Kullanıcı ID'si girin.")
             else:
                 st.error("İşbirlikçi filtreleme modeli şu anda kullanılamıyor.")
+
     elif choice == menu[2]: # Mood-Based Recommendation
         st.success("**Mood-Based Recommendation**")
-        mood = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys()))
+        mood_selected = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys())) # Renamed variable
         if st.button("Get Mood-Based Recommendations"):
-            recs = recommend_by_mood(
-                mood,
-                movies,
-                st.session_state.get('watched_movies', set()), # Pass watched movies
+            # movies DataFrame passed here should have tmdbId
+            recs_df = recommend_by_mood(
+                mood_selected,
+                movies, 
+                st.session_state.get('watched_movies', set()),
                 top_n=10
             )
-            if not recs.empty:
-                with st.expander("See Recommendations"):
-                    show_table(recs)
-            else:
-                st.warning("No movies found for this mood.")
+            if not recs_df.empty:
+                with st.expander("See Recommendations", expanded=True):
+                    # Poster display logic adapted for this section
+                    if 'movieId' not in recs_df.columns and 'tmdbId' not in recs_df.columns:
+                        st.warning("Recommendation data is missing 'movieId' or 'tmdbId' for poster lookup.")
+                        temp_display_df = recs_df.copy()
+                        if 'title' not in temp_display_df.columns: temp_display_df['title'] = "N/A"
+                        if 'genres' not in temp_display_df.columns: temp_display_df['genres'] = "N/A"
+                        show_table(temp_display_df[['title', 'genres']]) # Fallback
+                            
+                    else:
+                        for index, row in recs_df.iterrows():
+                            title_display = row.get('title', "Title not available")
+                            genres_display = row.get('genres', "Genres not available")
+                            st.subheader(f"{recs_df.index.get_loc(index) + 1}. {title_display}")
+                            st.write(f"**Genres:** {genres_display}")
 
-    elif choice == menu[3]:
+                            tmdb_id_to_fetch = None
+                            if 'tmdbId' in row and pd.notna(row['tmdbId']):
+                                tmdb_id_to_fetch = int(row['tmdbId'])
+                            elif 'movieId' in row and pd.notna(row['movieId']) and not links_df.empty:
+                                link_info = links_df[links_df['movieId'] == row['movieId']]
+                                if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
+                                    tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+                            
+                            if tmdb_id_to_fetch:
+                                movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
+                                if movie_details and movie_details.get("poster_url"):
+                                    col1, col2 = st.columns([1, 3])
+                                    with col1:
+                                        st.image(movie_details["poster_url"], width=150)
+                                    with col2:
+                                        if movie_details.get("overview"):
+                                            st.caption(f"Overview: {movie_details['overview']}")
+                                        else:
+                                            st.caption("Overview not available.")
+                                elif movie_details:
+                                    st.caption("Poster not found on TMDB.")
+                                    if movie_details.get("overview"):
+                                        st.caption(f"Overview: {movie_details['overview']}")
+                                else:
+                                    st.caption("Details (including poster) not found on TMDB.")
+                            else:
+                                st.caption("TMDB ID not found, poster cannot be displayed.")
+                            st.markdown("---")
+            else:
+                st.warning("No movies found for this mood or all were in your watch history.")
+
+    elif choice == menu[3]: # Random Movie
         st.success("**Random Movie**")
         if st.button("Pick a Random Movie"):
-            movie = pick_random_movie(movies)
-            st.info(f"**Title:** {movie['title']}")
-            st.info(f"**Genres:** {movie['genres']}")
+            if not movies.empty:
+                # Ensure pick_random_movie gets the 'movies' DataFrame that potentially has 'tmdbId'
+                movie = pick_random_movie(movies) 
+                
+                # Corrected f-strings
+                st.info(f"**Title:** {movie['title']}")
+                st.info(f"**Genres:** {movie['genres']}")
 
-    elif choice == menu[4]:
-        st.success("**Watch History & Personalized Recommendations**")
-        all_titles = movies['title'].tolist()
-        watched_titles = st.multiselect(
-            "Select movies you've watched:",
-            options=all_titles,
-            default=[title for title in all_titles if title in st.session_state['watched_movies']]
-        )
-        st.session_state['watched_movies'] = set(watched_titles)
-        st.info("You've watched:")
-        watched_df = movies[movies['title'].isin(watched_titles)][['title', 'genres']]
-        show_table(watched_df)
-        if st.button("Recommend based on my watched movies"):
-            if watched_titles:
-                recs = recommend_by_watched_genres(
-                    watched_titles, 
-                    movies, 
-                    top_n=10
-                    # recommend_by_watched_genres inherently handles not re-recommending watched_titles
-                )
-                if not recs.empty:
-                    with st.expander("See Recommendations based on Watched Genres"):
-                        show_table(recs)
+                tmdb_id_to_fetch = None
+                # Attempt to get tmdbId directly from the movie series (if merged and not NaN)
+                if 'tmdbId' in movie and pd.notna(movie['tmdbId']):
+                    tmdb_id_to_fetch = int(movie['tmdbId'])
+                # Fallback: if tmdbId is not in movie series or is NaN, 
+                # try to find it using movieId from movie series and links_df
+                elif 'movieId' in movie and pd.notna(movie['movieId']) and not links_df.empty:
+                    link_info = links_df[links_df['movieId'] == movie['movieId']]
+                    if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
+                        tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+
+                if tmdb_id_to_fetch:
+                    movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
+                    if movie_details and movie_details.get("poster_url"):
+                        st.image(movie_details["poster_url"], width=200)
+                    if movie_details and movie_details.get("overview"):
+                        st.caption(f"Overview: {movie_details['overview']}") # Corrected f-string
+                    elif movie_details: # Details fetched but no poster/overview
+                        st.caption("Poster or overview not available on TMDB.")
+                    else: # Failed to fetch details
+                        st.caption("Details not found on TMDB.")
                 else:
-                    st.warning("No recommendations found based on your watched history. Try adding more movies to your watch history or explore other recommendation types.")
+                    st.caption("TMDB ID not found for this movie, so poster and overview cannot be displayed.")
             else:
-                st.info("Please select some movies you've watched to get recommendations.") # Added message for empty watched_titles
+                st.warning("No movies available to pick from.")
 
-    elif choice == menu[5]:
-        st.success("**Unwatched Movies**")
-        all_titles = movies['title'].tolist()
-        unwatched_titles = [title for title in all_titles if title not in st.session_state['watched_movies']]
-        selected_unwatched = st.multiselect(
-            "Select movies you want to mark as watched:",
-            options=unwatched_titles
-        )
-        st.session_state['watched_movies'].update(selected_unwatched)
-        st.info("Movies you haven't watched yet (showing 10):")
-        unwatched_df = movies[movies['title'].isin(unwatched_titles)][['title', 'genres']].head(10)
-        show_table(unwatched_df)
+    elif choice == menu[4]: # Watch History & Personalized Recommendations
+        st.success("**Watch History & Personalized Recommendations**")
+
+        # --- MODIFICATION START for adding movies to watch history ---
+        if not movies.empty and 'title' in movies.columns:
+            all_movie_titles = movies['title'].dropna().sort_values().unique().tolist()
+            selectable_movies = [
+                title for title in all_movie_titles 
+                if title not in st.session_state.get('watched_movies', set())
+            ]
+        else:
+            selectable_movies = []
+
+        if selectable_movies:
+            st.multiselect(
+                "Select movies to add to your watch history:",
+                options=selectable_movies,
+                key="add_selected_movies_multiselect"
+            )
+            if st.button("Add Selected to Watch History", key="add_selected_to_watch_history_button"):
+                selected_movies_to_add = st.session_state.add_selected_movies_multiselect
+                if selected_movies_to_add:
+                    for movie_title in selected_movies_to_add:
+                        st.session_state['watched_movies'].add(movie_title)
+                    st.success(f"{len(selected_movies_to_add)} movie(s) added to your watch history.")
+                    # Clear the multiselect selection after adding and rerun
+                    st.session_state.add_selected_movies_multiselect = []
+                    st.experimental_rerun()
+                else:
+                    st.warning("Please select at least one movie to add.")
+        elif not movies.empty and 'title' in movies.columns and not all_movie_titles: # movies df exists but no titles
+             st.warning("Movie list is empty or contains no valid titles to select from.")
+        elif movies.empty or 'title' not in movies.columns: # movies df problematic
+            st.warning("Movie list is not available to make selections.")
+        else: # All selectable movies are already watched or no movies initially
+            st.info("No new movies available to add to watch history (either all are watched or the movie list is empty).")
+        # --- MODIFICATION END for adding movies to watch history ---
+        
+        # Display current watch history
+        if st.session_state.get('watched_movies', set()):
+            st.write("Your current watch history:")
+            watched_df = pd.DataFrame(list(st.session_state['watched_movies']), columns=['Title'])
+            watched_df.index = range(1, len(watched_df) + 1)
+            st.dataframe(watched_df, height=min(300, len(watched_df) * 40))
+        else:
+            st.info("Your watch history is currently empty. Add movies using the selection field above.")
+
+        if st.button("Get Recommendations Based on Watch History"):
+            watched_titles_set = st.session_state.get('watched_movies', set())
+            if not watched_titles_set:
+                st.warning("Your watch history is empty. Please add some movies using the selection field above to get personalized suggestions.")
+            else:
+                # Corrected call to recommend_by_watched_genres
+                recs_based_on_watched = recommend_by_watched_genres(
+                    watched_titles=list(watched_titles_set), 
+                    movies=movies,
+                    top_n=10
+                )
+
+                if not recs_based_on_watched.empty:
+                    st.subheader("Recommendations based on your watch history:")
+                    with st.expander("See Recommendations", expanded=True):
+                        # Poster display logic adapted for this section
+                        if 'movieId' not in recs_based_on_watched.columns and 'tmdbId' not in recs_based_on_watched.columns:
+                            st.warning("Recommendation data is missing 'movieId' or 'tmdbId' for poster lookup.")
+                            temp_display_df = recs_based_on_watched.copy()
+                            if 'title' not in temp_display_df.columns: temp_display_df['title'] = "N/A"
+                            if 'genres' not in temp_display_df.columns: temp_display_df['genres'] = "N/A"
+                            show_table(temp_display_df[['title', 'genres']]) # Fallback
+                        else:
+                            for index, row in recs_based_on_watched.iterrows():
+                                title_display = row.get('title', "Title not available")
+                                genres_display = row.get('genres', "Genres not available")
+                                st.subheader(f"{recs_based_on_watched.index.get_loc(index) + 1}. {title_display}")
+                                st.write(f"**Genres:** {genres_display}")
+
+                                tmdb_id_to_fetch = None
+                                if 'tmdbId' in row and pd.notna(row['tmdbId']):
+                                    tmdb_id_to_fetch = int(row['tmdbId'])
+                                elif 'movieId' in row and pd.notna(row['movieId']) and not links_df.empty:
+                                    link_info = links_df[links_df['movieId'] == row['movieId']]
+                                    if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
+                                        tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+
+                                if tmdb_id_to_fetch:
+                                    movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
+                                    if movie_details and movie_details.get("poster_url"):
+                                        col1, col2 = st.columns([1, 3])
+                                        with col1:
+                                            st.image(movie_details["poster_url"], width=150)
+                                        with col2:
+                                            if movie_details.get("overview"):
+                                                st.caption(f"Overview: {movie_details['overview']}")
+                                            else:
+                                                st.caption("Overview not available.")
+                                    elif movie_details: # Details fetched but no poster
+                                        st.caption("Poster not found on TMDB.")
+                                        if movie_details.get("overview"):
+                                            st.caption(f"Overview: {movie_details['overview']}")
+                                    else: # No details from TMDB
+                                        st.caption("Details (including poster) not found on TMDB.")
+                                else:
+                                    st.caption("TMDB ID not found, poster cannot be displayed.")
+                                st.markdown("---")
+                else:
+                    st.info("Could not find new recommendations based on your current watch history and preferences. Try adding more diverse movies to your history!")
+
+    elif choice == menu[5]: # Unwatched Movies
+        st.subheader("🕵️ Unwatched Movies")
+        if 'watched_movies' not in st.session_state or not st.session_state['watched_movies']:
+            st.info("Your watch history is empty. Watch some movies first!")
+        else:
+            unwatched_movies = movies[~movies['title'].isin(st.session_state['watched_movies'])]
+            if not unwatched_movies.empty:
+                st.markdown("### Here are some movies you haven't watched yet:")
+                show_table(unwatched_movies[['title', 'genres']])
+            else:
+                st.info("You've watched all the movies in our database!")
 
 if __name__ == "__main__":
     main()
