@@ -21,12 +21,31 @@ MOOD_GENRE_MAP = {
 }
 
 @st.cache_data
+def load_cleaned_data(filename, data_path='cleaned_data'):
+    """Loads a CSV file from the cleaned_data directory with error handling."""
+    file_path = os.path.join(data_path, filename)
+    try:
+        df = pd.read_csv(file_path)
+        if df.empty:
+            st.warning(f"Warning: {filename} is empty.")
+        return df
+    except FileNotFoundError:
+        st.error(f"ERROR: File not found: {file_path}. Please ensure the file exists.")
+        return pd.DataFrame() # Return empty DataFrame on error
+    except pd.errors.EmptyDataError:
+        st.error(f"ERROR: No data: {filename} is empty or corrupted.")
+        return pd.DataFrame() # Return empty DataFrame on error
+    except Exception as e:
+        st.error(f"ERROR: An unexpected error occurred while loading {filename}: {e}")
+        return pd.DataFrame() # Return empty DataFrame on error
+
+@st.cache_data
 def load_movies(data_path='cleaned_data'):
-    return pd.read_csv(os.path.join(data_path, 'movies_clean.csv'))
+    return load_cleaned_data('movies_clean.csv', data_path)
 
 @st.cache_data
 def load_ratings(data_path='cleaned_data'):
-    return pd.read_csv(os.path.join(data_path, 'ratings_clean.csv'))
+    return load_cleaned_data('ratings_clean.csv', data_path)
 
 @st.cache_resource # Model gibi kaynaklar için cache_resource daha uygun
 def load_trained_surprise_model(model_filename="svd_trained_model.pkl"):
@@ -55,7 +74,7 @@ def load_trained_surprise_model(model_filename="svd_trained_model.pkl"):
 
 @st.cache_data
 def load_tags(data_path='cleaned_data'):
-    return pd.read_csv(os.path.join(data_path, 'tags_clean.csv'))
+    return load_cleaned_data('tags_clean.csv', data_path)
 
 # Centralized text cleaning function (consistent with preprocess_dataset.py)
 def clean_text(text):
