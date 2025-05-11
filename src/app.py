@@ -124,46 +124,83 @@ def get_tfidf_matrix(movies, tags):
 def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, watched_titles, top_n=10):
     """
     Generates movie recommendations for a user using a trained Surprise model.
+    Filters out movies the user has already rated and movies in the watched_titles list.
     """
-    # Get a list of all movie IDs
     all_movie_ids = movies_df['movieId'].unique()
-    
-    # Get a list of movies already rated by the user
     user_rated_movie_ids = ratings_df[ratings_df['userId'] == user_id]['movieId'].unique()
-    
-    # Predict ratings for movies not yet rated by the user
+
     predictions = []
-    for movie_id in all_movie_ids:
-        if movie_id not in user_rated_movie_ids:
-            # Surprise model's predict method returns a Prediction object
-            # uid (user id), iid (item id), r_ui (true rating), est (estimated rating), details
-            pred = surprise_model.predict(uid=user_id, iid=movie_id)
-            predictions.append((movie_id, pred.est))
+    # Consider only movies not yet rated by the user for prediction
+    unrated_movie_ids = [mid for mid in all_movie_ids if mid not in user_rated_movie_ids]
+
+    for movie_id in unrated_movie_ids:
+        pred = surprise_model.predict(uid=user_id, iid=movie_id)
+        predictions.append((movie_id, pred.est))
             
-    # Sort predictions by estimated rating in descending order
     predictions.sort(key=lambda x: x[1], reverse=True)
     
-    # Get the top N movie IDs
-    top_movie_ids = [movie_id for movie_id, score in predictions[:top_n]]
+    # Fetch more candidates initially to account for filtering watched_titles later
+    # Buffer is added to increase chances of getting top_n results
+    num_candidates_to_fetch = top_n + (len(watched_titles) if watched_titles else 0) + 10 
     
-    # Get movie details for the recommended movies
-    recommended_movies = movies_df[movies_df['movieId'].isin(top_movie_ids)][['title', 'genres']]
+    candidate_movie_ids_ordered = [movie_id for movie_id, score in predictions[:num_candidates_to_fetch]]
     
-    # To maintain the order of recommendations
-    recommended_movies = recommended_movies.set_index('movieId').loc[top_movie_ids].reset_index()
-    return recommended_movies[['title', 'genres']]
+    if not candidate_movie_ids_ordered: # No predictions or all rated
+        return pd.DataFrame(columns=['title', 'genres'])
+
+    # Get movie details for the candidates
+    # Ensure we only try to fetch details for existing movieIds
+    recommended_movies_df = movies_df[movies_df['movieId'].isin(candidate_movie_ids_ordered)].copy()
+    
+    # Filter out watched movies by title from the candidates
+    if watched_titles and not recommended_movies_df.empty:
+        recommended_movies_df = recommended_movies_df[~recommended_movies_df['title'].isin(watched_titles)]
+
+    # Re-order the filtered candidates based on original prediction score and select top_n
+    if not recommended_movies_df.empty:
+        # Filter candidate_movie_ids_ordered to only those that are still in recommended_movies_df after watched_filter
+        final_candidate_ids_in_order = [
+            mid for mid in candidate_movie_ids_ordered 
+            if mid in recommended_movies_df['movieId'].values
+        ]
+        if final_candidate_ids_in_order:
+            recommended_movies_df = recommended_movies_df.set_index('movieId').loc[final_candidate_ids_in_order].reset_index()
+        else: # All candidates were filtered out by watched_titles or didn't exist in movies_df
+             recommended_movies_df = pd.DataFrame(columns=['title', 'genres', 'movieId'])
+    # else: recommended_movies_df is already empty or became empty after watched_titles filter
+        
+    return recommended_movies_df[['title', 'genres']].head(top_n)
 
 
-def recommend_by_mood(mood, movies, top_n=10):
+def recommend_by_mood(mood, movies, watched_movies, top_n=10):
     genres = MOOD_GENRE_MAP.get(mood.lower())
     if not genres:
         return pd.DataFrame()
-    mask = movies['genres'].apply(lambda g: any(genre in g for genre in genres))
-    filtered = movies[mask]
-    if filtered.empty:
+
+    movies_copy = movies.copy()
+    # Ensure 'genres' column is string type before applying string operations
+    movies_copy['genres'] = movies_copy['genres'].astype(str)
+    
+    mask = movies_copy['genres'].apply(lambda g: any(genre in g for genre in genres))
+    filtered_movies = movies_copy[mask]
+    
+    if filtered_movies.empty:
         return pd.DataFrame()
-    recommendations = filtered.sample(n=min(top_n, len(filtered)), random_state=42)[['title', 'genres']].reset_index(drop=True)
-    return recommendations
+    
+    # Determine how many movies to sample initially
+    # Sample more to account for filtering watched_movies, but not more than available. Add a small buffer.
+    num_to_sample = min(top_n + (len(watched_movies) if watched_movies else 0) + 5, len(filtered_movies))
+
+    if num_to_sample <= 0: # If no movies to sample from (e.g., filtered_movies is small and watched_movies is large)
+        return pd.DataFrame(columns=['title', 'genres'])
+        
+    recommendations = filtered_movies.sample(n=num_to_sample, random_state=42)[['title', 'genres']]
+    
+    # Filter out watched movies
+    if watched_movies and not recommendations.empty:
+        recommendations = recommendations[~recommendations['title'].isin(watched_movies)]
+        
+    return recommendations.head(top_n).reset_index(drop=True)
 
 def pick_random_movie(movies):
     movie = movies.sample(n=1).iloc[0]
@@ -338,69 +375,65 @@ def recommend_by_watched_genres(watched_titles, movies, top_n=10):
             
     # Step 5: Ensure final result is not more than top_n and has a clean index
     return recommendations.head(top_n).reset_index(drop=True)
-"""
-def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
-    matches = movies[movies['title'].str.lower().str.contains(movie_title.lower())]
-    # NaN olanları kontrol ederek güvenli arama
-    matches = movies[movies['title'].fillna('').str.lower().str.contains(movie_title.lower(), na=False)]
-    
-    if matches.empty:
-        return pd.DataFrame(), None
-    idx = matches.index[0]
-    cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
-    similar_indices = cosine_sim.argsort()[-top_n-1:-1][::-1]
-    recommendations = movies.iloc[similar_indices][['title', 'genres']].reset_index(drop=True)
-    return recommendations, matches.iloc[0]['title']
-"""
-def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, top_n=10):
-    # Ensure you're dropping NaN values from the correct columns
-    # movies DataFrame here is actually movies_with_tags which includes 'title_for_matching'
-    movies_df = movies.dropna(subset=['title', 'genres', 'title_for_matching']).copy()
-    
-    # If the movie title is empty, return an empty DataFrame
-    if not movie_title:
+
+def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, watched_movies, top_n=10):
+    # movies argument is movies_with_tags, which was used to build tfidf_matrix
+    movies_df = movies.copy() 
+    # Ensure 'title_for_matching' (used for finding the input movie) is string and handles NaNs
+    movies_df['title_for_matching'] = movies_df['title_for_matching'].fillna('').astype(str)
+
+    # Validate movie_title input
+    if not movie_title or not movie_title.strip():
+        # st.warning("Please enter a movie title for content-based recommendations.") # Handled in main
         return pd.DataFrame(), None
 
-    # Clean and normalize the user's input title
     cleaned_movie_title = clean_text(movie_title).lower()
-
     if not cleaned_movie_title: # If cleaning results in an empty string
+        # st.warning("Could not process the entered movie title.") # Handled in main
         return pd.DataFrame(), None
 
-    # Filter movies by matching the cleaned title against 'title_for_matching'
-    # Assuming 'title_for_matching' is already cleaned and lowercased by preprocess_dataset.py
+    # Find matches for the input movie title using the cleaned 'title_for_matching' column
     matches = movies_df[movies_df['title_for_matching'].str.contains(cleaned_movie_title, na=False)]
-    
     if matches.empty:
+        # st.warning(f"No movie found matching '{movie_title}'.") # Handled in main
         return pd.DataFrame(), None
 
-    # Get the index of the first matched movie
-    # It's important that tfidf_matrix was built using the same indices as movies_df
-    # or that movies_df is the same DataFrame (with same row order) used to build tfidf_matrix
-    
-    # Find the original index in the DataFrame that was used to create the TF-IDF matrix.
-    # Assuming 'movies_with_tags' (passed as 'movies' argument) is the one used for TF-IDF.
-    # And 'matches' is a filtered version of it.
-    
-    # Get the index from the original DataFrame that corresponds to the matched movie
-    # This assumes that the 'movies' df passed to this function is the same one
-    # that was used to generate the tfidf_matrix.
-    # The 'matches' DataFrame will have indices from this original 'movies' DataFrame.
-    
-    idx = matches.index[0] # This index should correspond to the row in the original tfidf_matrix
+    # idx is the index in the original DataFrame (movies_with_tags) from which tfidf_matrix was built
+    idx = matches.index[0] 
+    matched_movie_original_title = matches.iloc[0]['title'] # Get the display title of the matched movie
         
-    # Calculate cosine similarity between the matched movie and all other movies
+    # Calculate cosine similarity
     cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
     
-    # Get the top N most similar movies
-    similar_indices = cosine_sim.argsort()[-top_n-1:-1][::-1]
+    # Determine number of candidates to fetch: top_n + watched_count + buffer
+    num_candidates_to_fetch = top_n + (len(watched_movies) if watched_movies else 0) + 5
     
-    # Prepare the recommendations using the original 'title' and 'genres' for display
-    # We use .iloc on the original 'movies' DataFrame (passed as argument) to get the correct rows
-    recommendations = movies.iloc[similar_indices][['title', 'genres']].reset_index(drop=True)
+    # Number of other movies available for recommendation (excluding the movie itself)
+    num_available_others = len(cosine_sim) - 1
+    if num_available_others <= 0:
+        return pd.DataFrame(columns=['title', 'genres']), matched_movie_original_title
+
+    # Fetch at most num_available_others
+    actual_k_to_fetch = min(num_candidates_to_fetch, num_available_others)
+    if actual_k_to_fetch <= 0:
+        return pd.DataFrame(columns=['title', 'genres']), matched_movie_original_title
+
+    # Get indices of the (actual_k_to_fetch) most similar movies, excluding the movie itself.
+    # argsort()[-1] is the movie itself (highest similarity). We want others.
+    similar_indices = cosine_sim.argsort()[-(actual_k_to_fetch + 1):-1][::-1]
+
+    if not similar_indices.size: # No similar movies found (should be caught by actual_k_to_fetch <=0)
+        return pd.DataFrame(columns=['title', 'genres']), matched_movie_original_title
     
-    # Return the original title of the matched movie for display
-    return recommendations, matches.iloc[0]['title']
+    # Retrieve recommendations using .iloc on the original 'movies' (movies_with_tags) DataFrame
+    recommendations = movies.iloc[similar_indices][['title', 'genres']].copy() # Use .copy() to avoid SettingWithCopyWarning later if needed
+    
+    # Filter out watched movies from the recommendations
+    if watched_movies and not recommendations.empty:
+        recommendations = recommendations[~recommendations['title'].isin(watched_movies)]
+        
+    # Return top_n recommendations and the title of the movie they were based on
+    return recommendations.head(top_n).reset_index(drop=True), matched_movie_original_title
 
 def show_table(df):
     if not df.empty:
@@ -466,42 +499,44 @@ def main():
         else:
             movie_title = st.text_input("🎬 Enter a movie title you like (no need for year):")
             if st.button("Get Recommendations"):
-                # Ensure movies_with_tags is passed as it was used for TF-IDF
-                recs, matched_title = recommend_similar_movies_partial(
-                    movie_title,
-                    movies_with_tags,
-                    tfidf_matrix,
-                    st.session_state.get('watched_movies', set()), # Pass watched movies
-                    top_n=10
-                )
-                if matched_title:
-                    st.info(f"Showing recommendations based on: **{matched_title}**")
-                if not recs.empty:
-                    with st.expander("See Recommendations"):
-                        show_table(recs)
+                if not movie_title.strip():
+                    st.warning("Please enter a movie title.")
                 else:
-                    st.warning("No recommendations found. Try a different title.")
+                    recs, matched_title = recommend_similar_movies_partial(
+                        movie_title,
+                        movies_with_tags, # This is movies DataFrame with 'content' and 'title_for_matching'
+                        tfidf_matrix,
+                        st.session_state.get('watched_movies', set()), # Pass watched movies
+                        top_n=10
+                    )
+                    if matched_title:
+                        st.info(f"Showing recommendations based on: **{matched_title}**")
+                    if not recs.empty:
+                        with st.expander("See Recommendations"):
+                            show_table(recs)
+                    else:
+                        st.warning("No recommendations found. Try a different title.")
 
     elif choice == menu[1]:
         st.success("**Collaborative Filtering Recommendation**")
         user_id_input = st.number_input("Enter your userId:", min_value=1, step=1, value=1)
         if st.button("Get Collaborative Recommendations"):
-            if surprise_model is not None: # Modelin yüklendiğinden emin ol
+            if surprise_model is not None: 
                 if user_id_input:
                     user_id = int(user_id_input)
                     recs = get_user_recommendations(
                         user_id,
                         surprise_model,
-                        movies,
+                        movies, # Original movies DataFrame
                         ratings,
                         st.session_state.get('watched_movies', set()), # Pass watched movies
                         top_n=10
                     )
                     if not recs.empty:
                         with st.expander("See Recommendations"):
-                            show_table(recs)
+                            show_table(recs) 
                     else:
-                        st.warning("Bu kullanıcı için öneri bulunamadı. Kullanıcı ID'sini kontrol edin veya kullanıcı tüm filmleri oylamış olabilir.")
+                        st.warning("No recommendations found for this user. They might have rated all available movies, the user ID could be invalid, or all potential recommendations were already in your watch history.")
                 else:
                     st.warning("Lütfen bir Kullanıcı ID'si girin.")
             else:
@@ -543,14 +578,19 @@ def main():
         show_table(watched_df)
         if st.button("Recommend based on my watched movies"):
             if watched_titles:
-                recs = recommend_by_watched_genres(watched_titles, movies, top_n=10)
+                recs = recommend_by_watched_genres(
+                    watched_titles, 
+                    movies, 
+                    top_n=10
+                    # recommend_by_watched_genres inherently handles not re-recommending watched_titles
+                )
                 if not recs.empty:
-                    with st.expander("See Recommendations"):
+                    with st.expander("See Recommendations based on Watched Genres"):
                         show_table(recs)
                 else:
-                    st.warning("No recommendations found based on your watched movies.")
+                    st.warning("No recommendations found based on your watched history. Try adding more movies to your watch history or explore other recommendation types.")
             else:
-                st.info("You haven't marked any movies as watched yet.")
+                st.info("Please select some movies you've watched to get recommendations.") # Added message for empty watched_titles
 
     elif choice == menu[5]:
         st.success("**Unwatched Movies**")
