@@ -581,6 +581,12 @@ def main():
         # Do not st.stop() here if other features can work without ratings.
         # However, if collaborative filtering is selected and ratings are empty, it should be handled there.
 
+    # --- START: Logic to reset multiselect after submission ---
+    if st.session_state.get('movies_added_to_watch_history_flag', False):
+        st.session_state.add_selected_movies_multiselect = []
+        st.session_state.movies_added_to_watch_history_flag = False # Reset the flag
+    # --- END: Logic to reset multiselect after submission ---
+
     # Generate TF-IDF matrix and related components
     tfidf_matrix, tfidf_vectorizer, movies_with_tags = get_tfidf_matrix(movies.copy(), tags.copy())
 
@@ -609,6 +615,8 @@ def main():
         st.session_state['watched_movies'] = set()
     if 'add_selected_movies_multiselect' not in st.session_state: # Key for the new multiselect
         st.session_state.add_selected_movies_multiselect = []
+    if 'movies_added_to_watch_history_flag' not in st.session_state: # Initialize the new flag
+        st.session_state.movies_added_to_watch_history_flag = False
 
     menu = [
         "🎯 Content-Based Recommendation",
@@ -881,9 +889,9 @@ def main():
                     for movie_title in selected_movies_to_add:
                         st.session_state['watched_movies'].add(movie_title)
                     st.success(f"{len(selected_movies_to_add)} movie(s) added to your watch history.")
-                    # Clear the multiselect selection after adding and rerun
-                    st.session_state.add_selected_movies_multiselect = []
-                    st.experimental_rerun()
+                    # Set the flag to clear multiselect on next rerun
+                    st.session_state.movies_added_to_watch_history_flag = True
+                    st.rerun() # Corrected from st.experimental_rerun()
                 else:
                     st.warning("Please select at least one movie to add.")
         elif not movies.empty and 'title' in movies.columns and not all_movie_titles: # movies df exists but no titles
