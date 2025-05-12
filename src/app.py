@@ -447,93 +447,206 @@ def recommend_by_watched_genres(watched_titles, movies, top_n=10):
 
     return recommendations[final_cols].head(top_n).reset_index(drop=True)
 
-def recommend_similar_movies_partial(movie_title, movies, tfidf_matrix, watched_movies, top_n=10):
-    # movies argument is movies_with_tags, which was used to build tfidf_matrix
-    # Define columns to return, ensuring 'tmdbId' is included if available in the input 'movies' DataFrame
+# The new, enhanced version of recommend_similar_movies_partial starts here
+# The old version that was previously here has been removed.
+
+def recommend_similar_movies_partial(
+    movie_title, 
+    movies_with_content_for_tfidf, # DataFrame used to build TF-IDF (movies_with_tags)
+    tfidf_matrix, 
+    movies_for_output_columns,    # DataFrame to get final movie details from (main \'movies\' df)
+    watched_movie_titles_to_exclude, 
+    top_n=10,                     # How many to return for this specific seed
+    internal_candidate_count=20   # How many raw similar items to consider internally
+):
     cols_to_return = ['movieId', 'title', 'genres']
-    if 'tmdbId' in movies.columns: # Check against the 'movies' df passed in (movies_with_tags)
+    if 'tmdbId' in movies_for_output_columns.columns:
         cols_to_return.append('tmdbId')
 
-    if movies.empty or tfidf_matrix is None:
-        return pd.DataFrame(columns=cols_to_return), None
+    # Clean the input movie title for matching
+    if not movie_title or not str(movie_title).strip():
+        return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None # Return with score col
+    
+    cleaned_movie_title = clean_text(str(movie_title)).lower()
+    if not cleaned_movie_title:
+        return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
 
-    movies_df = movies.copy() # Work on a copy
+    # Find matches for the input movie title using 'title_for_matching' from the TF-IDF source DataFrame
+    # Ensure movies_with_content_for_tfidf has 'title_for_matching'
+    if 'title_for_matching' not in movies_with_content_for_tfidf.columns:
+        st.error("Critical: 'title_for_matching' not in DataFrame for TF-IDF. Cannot find movie.")
+        return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
 
-    # Ensure 'title_for_matching' is present and correctly formatted for robust matching
-    if 'title_for_matching' not in movies_df.columns or movies_df['title_for_matching'].isnull().all():
-        movies_df['title_for_matching'] = movies_df['title'].fillna('').apply(clean_text).str.lower()
-    else:
-        # Ensure it's string type and fill NaNs if it somehow exists but has them
-        movies_df['title_for_matching'] = movies_df['title_for_matching'].fillna('').astype(str)
-
-
-    if not movie_title or not movie_title.strip():
-        return pd.DataFrame(columns=cols_to_return), None
-
-    cleaned_movie_title = clean_text(movie_title).lower()
-    if not cleaned_movie_title: 
-        return pd.DataFrame(columns=cols_to_return), None
-
-    # Find matches for the input movie title using the cleaned 'title_for_matching' column
-    matches = movies_df[movies_df['title_for_matching'].str.contains(cleaned_movie_title, na=False)]
+    # Ensure it's string and handle potential NaNs before .str.contains
+    movies_with_content_for_tfidf['title_for_matching'] = movies_with_content_for_tfidf['title_for_matching'].fillna('').astype(str)
+    matches = movies_with_content_for_tfidf[movies_with_content_for_tfidf['title_for_matching'].str.contains(cleaned_movie_title, na=False)]
+    
     if matches.empty:
-        return pd.DataFrame(columns=cols_to_return), None
-
-    # idx is the index in the original DataFrame (movies_with_tags) from which tfidf_matrix was built
-    # It's crucial that 'movies' (which is movies_with_tags) has a consistent index with tfidf_matrix
-    idx = matches.index[0] 
-    matched_movie_original_title = movies_df.loc[idx, 'title'] # Get the display title of the matched movie
+        # Try a more fuzzy match if direct cleaned contains fails
+        best_fuzz_score = 0
+        best_fuzz_idx = -1
+        # Use .items() for potentially non-unique indices or if index is not a simple range
+        for idx_val, row_title in movies_with_content_for_tfidf['title_for_matching'].items():
+            score = fuzz.ratio(cleaned_movie_title, row_title)
+            if score > best_fuzz_score:
+                best_fuzz_score = score
+                best_fuzz_idx = idx_val # Store the actual index value
         
-    # Calculate cosine similarity
-    cosine_sim = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
+        if best_fuzz_score > 80: # Adjust threshold as needed
+            matches = movies_with_content_for_tfidf.loc[[best_fuzz_idx]]
+        else:
+            return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
+
+
+    # idx is the index in movies_with_content_for_tfidf (which aligns with tfidf_matrix)
+    idx = matches.index[0]
+    # Get the display title of the matched movie from the output DataFrame for consistency
+    # We need its movieId to look up in movies_for_output_columns if it's different
+    matched_movie_id_from_tfidf_source = movies_with_content_for_tfidf.loc[idx, 'movieId']
     
-    # Determine number of candidates to fetch: top_n + watched_count + a buffer
-    num_watched = len(watched_movies) if watched_movies else 0
-    num_candidates_to_fetch = top_n + num_watched + 10 # Buffer for filtering
+    # Ensure movies_for_output_columns has 'movieId' and 'title'
+    if 'movieId' not in movies_for_output_columns.columns or 'title' not in movies_for_output_columns.columns:
+        st.error("Critical: 'movieId' or 'title' not in the DataFrame for output columns.")
+        # Fallback to title from tfidf source if essential columns are missing
+        matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title']
+    else:
+        matched_movie_row_for_display = movies_for_output_columns[movies_for_output_columns['movieId'] == matched_movie_id_from_tfidf_source]
+        if matched_movie_row_for_display.empty:
+            # Fallback to title from tfidf source if not found in output df
+            matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title']
+        else:
+            matched_movie_original_title = matched_movie_row_for_display['title'].iloc[0]
+        
+    cosine_sim_vector = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
     
-    # Number of other movies available for recommendation (excluding the movie itself)
-    num_available_others = len(cosine_sim) - 1
+    # Get indices of the (internal_candidate_count) most similar movies, EXCLUDING the movie itself.
+    similar_indices_with_self = cosine_sim_vector.argsort()[-(internal_candidate_count + 1):][::-1]
+    similar_indices_for_tfidf_df = [sim_idx for sim_idx in similar_indices_with_self if sim_idx != idx][:internal_candidate_count]
 
-    if num_available_others <= 0:
-        return pd.DataFrame(columns=cols_to_return), matched_movie_original_title
-
-    # Fetch at most num_available_others if num_candidates_to_fetch is too large
-    actual_k_to_fetch = min(num_candidates_to_fetch, num_available_others)
-    if actual_k_to_fetch <= 0: # Should not happen if num_available_others > 0, but as a safeguard
-        return pd.DataFrame(columns=cols_to_return), matched_movie_original_title
-
-    # Get indices of the (actual_k_to_fetch) most similar movies, EXCLUDING the movie itself.
-    # argsort gives indices from lowest to highest similarity. We take the top `actual_k_to_fetch + 1`
-    # (to include the movie itself if it's among the most similar to its own vector, which it will be),
-    # then reverse for highest-to-lowest, then filter out `idx`.
-    similar_indices_with_self = cosine_sim.argsort()[-(actual_k_to_fetch + 1):][::-1] 
-    similar_indices = [sim_idx for sim_idx in similar_indices_with_self if sim_idx != idx]
-    # Ensure we still have enough candidates after removing self, or take all available if less than actual_k_to_fetch
-    similar_indices = similar_indices[:actual_k_to_fetch]
-
-
-    if not similar_indices: # No other similar movies found after excluding self
-        return pd.DataFrame(columns=cols_to_return), matched_movie_original_title
+    if not similar_indices_for_tfidf_df:
+        return pd.DataFrame(columns=cols_to_return + ['similarity_score']), matched_movie_original_title
     
-    # Retrieve recommendations using .iloc on the original 'movies' (movies_with_tags) DataFrame
-    # This ensures we use the correct indices that align with the tfidf_matrix
-    recommendations = movies.iloc[similar_indices][cols_to_return].copy()
-    # Add similarity scores for sorting, then drop after filtering and top_n selection
-    recommendations['similarity_score'] = cosine_sim[similar_indices]
+    # Get movieIds and scores from the movies_with_content_for_tfidf DataFrame
+    # This DataFrame's indices (similar_indices_for_tfidf_df) align with cosine_sim_vector
+    
+    # Temp DataFrame from TF-IDF source to get movieIds and scores
+    # Ensure 'movieId' is present in movies_with_content_for_tfidf
+    if 'movieId' not in movies_with_content_for_tfidf.columns:
+        st.error("Critical: 'movieId' not in DataFrame for TF-IDF. Cannot create recommendations.")
+        return pd.DataFrame(columns=cols_to_return + ['similarity_score']), matched_movie_original_title
+
+    temp_recs_df = movies_with_content_for_tfidf.iloc[similar_indices_for_tfidf_df][['movieId']].copy()
+    temp_recs_df['similarity_score'] = cosine_sim_vector[similar_indices_for_tfidf_df]
+    
+    # Now, use these movieIds to get full details from movies_for_output_columns
+    # This ensures we have tmdbId and consistent titles/genres for output
+    # Ensure 'movieId' is present in movies_for_output_columns for merging
+    if 'movieId' not in movies_for_output_columns.columns:
+        st.error("Critical: 'movieId' not in the DataFrame for output columns. Cannot merge recommendations.")
+        # Fallback: return recommendations based on tfidf source if output df is problematic
+        # This might lack tmdbId or other refined details.
+        recommendations = movies_with_content_for_tfidf.iloc[similar_indices_for_tfidf_df][cols_to_return].copy()
+        recommendations['similarity_score'] = cosine_sim_vector[similar_indices_for_tfidf_df]
+
+    else:
+        recommendations = movies_for_output_columns[
+            movies_for_output_columns['movieId'].isin(temp_recs_df['movieId'])
+        ].copy()
+        
+        # Merge the similarity scores back
+        recommendations = recommendations.merge(
+            temp_recs_df[['movieId', 'similarity_score']],
+            on='movieId',
+            how='left' 
+        )
     
     # Filter out watched movies from the recommendations
-    if watched_movies and not recommendations.empty:
-        # Make sure 'title' column exists before trying to filter
+    if watched_movie_titles_to_exclude and not recommendations.empty:
+        # Ensure 'title' column exists in recommendations before filtering
         if 'title' in recommendations.columns:
-            recommendations = recommendations[~recommendations['title'].isin(watched_movies)]
+             recommendations = recommendations[~recommendations['title'].isin(watched_movie_titles_to_exclude)]
+        else:
+            # If 'title' is somehow missing, we can't filter by it. Log or handle as appropriate.
+            # For now, we proceed without this specific filtering if 'title' column is absent.
+            pass 
         
-    # Sort by similarity score (descending), take top_n, drop score column, and reset index
-    # This re-sort is important if watched movies were filtered out, to ensure we get the highest similarity
-    # among the remaining ones.
     final_recommendations = recommendations.sort_values(by='similarity_score', ascending=False)
-    final_recommendations = final_recommendations.drop(columns=['similarity_score'])
     
-    return final_recommendations.head(top_n).reset_index(drop=True), matched_movie_original_title
+    # Ensure all target columns are present
+    output_columns_with_score = cols_to_return + ['similarity_score']
+    for col in output_columns_with_score:
+        if col not in final_recommendations.columns:
+            final_recommendations[col] = pd.NA # Add as NA if missing
+
+    return final_recommendations[output_columns_with_score].head(top_n).reset_index(drop=True), matched_movie_original_title
+
+def recommend_based_on_watch_history_content(
+    watched_titles_list, 
+    movies_with_tags_for_tfidf, # This is movies_with_tags from get_tfidf_matrix
+    tfidf_matrix, 
+    main_movies_df,             # This is the full 'movies' df with tmdbId etc.
+    top_n=10
+):
+    if not watched_titles_list:
+        return pd.DataFrame()
+
+    all_recommendations_list = []
+    
+    # Get the actual movie DataFrame rows for watched titles to accurately exclude them
+    # _extract_watched_movies_and_genres is good for matching input titles to DataFrame rows
+    actual_watched_movies_df, _ = _extract_watched_movies_and_genres(watched_titles_list, main_movies_df.copy()) # Pass a copy
+    
+    watched_movie_titles_to_exclude = set()
+    if not actual_watched_movies_df.empty and 'title' in actual_watched_movies_df.columns:
+        watched_movie_titles_to_exclude = set(actual_watched_movies_df['title'].unique())
+    else: # Fallback if titles could not be matched, use the input list directly
+        watched_movie_titles_to_exclude = set(watched_titles_list)
+
+
+    for movie_title_seed in watched_titles_list:
+        recs_for_seed_df, matched_title = recommend_similar_movies_partial(
+            movie_title=movie_title_seed,
+            movies_with_content_for_tfidf=movies_with_tags_for_tfidf,
+            tfidf_matrix=tfidf_matrix,
+            movies_for_output_columns=main_movies_df,
+            watched_movie_titles_to_exclude=watched_movie_titles_to_exclude, # Pass the set of titles
+            top_n=top_n + 5, # Get a few extra per seed movie for better aggregation
+            internal_candidate_count=top_n + 15 # Consider more candidates internally
+        )
+        
+        if matched_title and not recs_for_seed_df.empty:
+            # recs_for_seed_df should now contain 'similarity_score'
+            all_recommendations_list.append(recs_for_seed_df)
+
+    if not all_recommendations_list:
+        st.info("Could not generate seed recommendations from watch history.")
+        return pd.DataFrame()
+
+    combined_recs_df = pd.concat(all_recommendations_list)
+    
+    if combined_recs_df.empty:
+        st.info("Combined recommendations are empty before filtering duplicates.")
+        return pd.DataFrame()
+
+    # Sort by similarity score and remove duplicates, keeping the highest score for each movie
+    combined_recs_df = combined_recs_df.sort_values(by='similarity_score', ascending=False)
+    combined_recs_df = combined_recs_df.drop_duplicates(subset=['movieId'], keep='first')
+
+    # Final filter for movies that might have been in watched_titles_list (if matching was imperfect)
+    # This check is against the 'title' column of the recommended movies.
+    final_recommendations_df = combined_recs_df[~combined_recs_df['title'].isin(watched_movie_titles_to_exclude)]
+    
+    # Define final columns based on main_movies_df
+    final_output_cols = ['movieId', 'title', 'genres']
+    if 'tmdbId' in main_movies_df.columns:
+        final_output_cols.append('tmdbId')
+    
+    # Ensure all required output columns are present
+    for col in final_output_cols:
+        if col not in final_recommendations_df.columns:
+            final_recommendations_df[col] = pd.NA 
+            
+    return final_recommendations_df[final_output_cols].head(top_n).reset_index(drop=True)
 
 def show_table(df):
     if not df.empty:
@@ -639,10 +752,11 @@ def main():
                     st.warning("Please enter a movie title.")
                 else:
                     recs_df, matched_title = recommend_similar_movies_partial(
-                        movie_title,
-                        movies_with_tags, # This DataFrame should have 'movieId' and 'tmdbId'
-                        tfidf_matrix,
-                        st.session_state.get('watched_movies', set()),
+                        movie_title=movie_title,
+                        movies_with_content_for_tfidf=movies_with_tags, 
+                        tfidf_matrix=tfidf_matrix,
+                        movies_for_output_columns=movies, # Pass the main movies DataFrame
+                        watched_movie_titles_to_exclude=st.session_state.get('watched_movies', set()),
                         top_n=10
                     )
                     if matched_title:
@@ -916,12 +1030,18 @@ def main():
             if not watched_titles_set:
                 st.warning("Your watch history is empty. Please add some movies using the selection field above to get personalized suggestions.")
             else:
-                # Corrected call to recommend_by_watched_genres
-                recs_based_on_watched = recommend_by_watched_genres(
-                    watched_titles=list(watched_titles_set), 
-                    movies=movies,
-                    top_n=10
-                )
+                if not content_based_enabled: # Check if tfidf_matrix etc. are available
+                    st.error("Content-based components are not available for watch history recommendations. Please check data loading and TF-IDF generation.")
+                    recs_based_on_watched = pd.DataFrame()
+                else:
+                    # Call the NEW function
+                    recs_based_on_watched = recommend_based_on_watch_history_content(
+                        watched_titles_list=list(watched_titles_set),
+                        movies_with_tags_for_tfidf=movies_with_tags, # DF used for TF-IDF
+                        tfidf_matrix=tfidf_matrix,                  # The TF-IDF matrix
+                        main_movies_df=movies,                      # Main movies DF with all info (incl. tmdbId)
+                        top_n=10
+                    )
 
                 if not recs_based_on_watched.empty:
                     st.subheader("Recommendations based on your watch history:")
@@ -947,7 +1067,7 @@ def main():
                                     link_info = links_df[links_df['movieId'] == row['movieId']]
                                     if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
                                         tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
-
+                                
                                 if tmdb_id_to_fetch:
                                     movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
                                     if movie_details and movie_details.get("poster_url"):
@@ -959,17 +1079,17 @@ def main():
                                                 st.caption(f"Overview: {movie_details['overview']}")
                                             else:
                                                 st.caption("Overview not available.")
-                                    elif movie_details: # Details fetched but no poster
+                                    elif movie_details:
                                         st.caption("Poster not found on TMDB.")
                                         if movie_details.get("overview"):
                                             st.caption(f"Overview: {movie_details['overview']}")
-                                    else: # No details from TMDB
+                                    else:
                                         st.caption("Details (including poster) not found on TMDB.")
                                 else:
                                     st.caption("TMDB ID not found, poster cannot be displayed.")
                                 st.markdown("---")
                 else:
-                    st.info("Could not find new recommendations based on your current watch history and preferences. Try adding more diverse movies to your history!")
+                    st.info("Could not find new recommendations based on your current watch history. Try adding more diverse movies!")
 
     elif choice == menu[5]: # Unwatched Movies
         st.subheader("🕵️ Unwatched Movies")
