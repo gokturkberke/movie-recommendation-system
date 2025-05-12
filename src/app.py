@@ -9,20 +9,7 @@ from scipy.sparse import csr_matrix
 from surprise import dump # Ensure this import is present
 from thefuzz import fuzz
 import requests # Added requests import
-
-# TMDB API Key
-TMDB_API_KEY = "d4dd76aa404d680766dbacc0e83552bd"
-
-MOOD_GENRE_MAP = {
-    "happy": ["Comedy", "Family", "Animation", "Romance"],
-    "sad": ["Drama", "Romance"],
-    "adventurous": ["Action", "Adventure", "Thriller"],
-    "scared": ["Horror", "Thriller", "Mystery"],
-    "excited": ["Action", "Adventure", "Sci-Fi"],
-    "nostalgic": ["Animation", "Family", "Fantasy"],
-    "thoughtful": ["Documentary", "Drama"],
-    "surprised": ["Mystery", "Thriller"],
-}
+from config import TMDB_API_KEY, MOOD_GENRE_MAP # YENİ EKLENEN SATIR
 
 @st.cache_data # API çağrılarını önbelleğe almak için
 def get_movie_details_from_tmdb(tmdb_id, api_key):
