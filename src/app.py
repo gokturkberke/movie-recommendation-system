@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import re
 from collections import Counter
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -9,7 +8,14 @@ from scipy.sparse import csr_matrix
 from surprise import dump # Ensure this import is present
 from thefuzz import fuzz
 import requests # Added requests import
-from config import TMDB_API_KEY, MOOD_GENRE_MAP # YENİ EKLENEN SATIR
+from config import TMDB_API_KEY, MOOD_GENRE_MAP
+from utils_data import (
+    load_movies,
+    load_ratings,
+    load_tags,
+    load_trained_surprise_model,
+    clean_text
+)
 
 @st.cache_data # API çağrılarını önbelleğe almak için
 def get_movie_details_from_tmdb(tmdb_id, api_key):
@@ -56,75 +62,6 @@ def get_movie_details_from_tmdb(tmdb_id, api_key):
     except Exception as e:
         print(f"Film detayı işlenirken beklenmedik hata (tmdb_id: {tmdb_id}): {e}")
         return None
-
-@st.cache_data
-def load_cleaned_data(filename, data_path='cleaned_data'):
-    """Loads a CSV file from the cleaned_data directory with error handling."""
-    file_path = os.path.join(data_path, filename)
-    try:
-        df = pd.read_csv(file_path)
-        if df.empty:
-            st.warning(f"Warning: {filename} is empty.")
-        return df
-    except FileNotFoundError:
-        st.error(f"ERROR: File not found: {file_path}. Please ensure the file exists.")
-        return pd.DataFrame() # Return empty DataFrame on error
-    except pd.errors.EmptyDataError:
-        st.error(f"ERROR: No data: {filename} is empty or corrupted.")
-        return pd.DataFrame() # Return empty DataFrame on error
-    except Exception as e:
-        st.error(f"ERROR: An unexpected error occurred while loading {filename}: {e}")
-        return pd.DataFrame() # Return empty DataFrame on error
-
-@st.cache_data
-def load_movies(data_path='cleaned_data'):
-    return load_cleaned_data('movies_clean.csv', data_path)
-
-@st.cache_data
-def load_ratings(data_path='cleaned_data'):
-    return load_cleaned_data('ratings_clean.csv', data_path)
-
-@st.cache_resource # Model gibi kaynaklar için cache_resource daha uygun
-def load_trained_surprise_model(model_filename="svd_trained_model.pkl"):
-    # app.py'nin bulunduğu dizin (src)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # cleaned_data klasörünün yolu (src'nin bir üst dizininde)
-    cleaned_data_dir = os.path.join(script_dir, '..', 'cleaned_data')
-    model_path = os.path.join(cleaned_data_dir, model_filename)
-
-    print(f"Önceden eğitilmiş Surprise modeli yükleniyor: {model_path}")
-    if not os.path.exists(model_path):
-        st.error(f"HATA: Kayıtlı model dosyası bulunamadı: {model_path}. "
-                 f"Lütfen önce train_save_model.py script'ini çalıştırın.")
-        return None # Model yüklenemezse None döndür
-
-    try:
-        # dump.load() bir tuple döndürür: (predictions, algo)
-        # Biz sadece algo'yu (modeli) istiyoruz.
-        loaded_object = dump.load(model_path)
-        model = loaded_object[1] # Model (algo) tuple'ın ikinci elemanıdır
-        print("Önceden eğitilmiş model başarıyla yüklendi.")
-        return model
-    except Exception as e:
-        st.error(f"Model yüklenirken bir hata oluştu: {e}")
-        return None
-
-@st.cache_data
-def load_tags(data_path='cleaned_data'):
-    return load_cleaned_data('tags_clean.csv', data_path)
-
-# Centralized text cleaning function (consistent with preprocess_dataset.py)
-def clean_text(text):
-    if pd.isnull(text):
-        return ""
-    text = str(text)
-    # Remove year in parentheses (e.g., "(1995)") if present
-    text = re.sub(r'\s*\(\d{4}\)', '', text)
-    # Remove special characters, keep alphanumeric and spaces
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    # Normalize whitespace (replace multiple spaces with a single space and strip)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
 
 def get_tfidf_matrix(movies, tags):
     if movies.empty:
