@@ -723,10 +723,12 @@ def main():
     elif choice == menu[1]:
         st.success("**Collaborative Filtering Recommendation**")
         st.markdown("""
-        This section utilizes our Singular Value Decomposition (SVD) model to provide
-        personalized movie recommendations. Explore suggestions for pre-defined demo profiles
-        (which will be filtered by their main genres after SVD) or enter a specific
-        MovieLens User ID for general SVD recommendations.
+        ### Personalized SVD Recommendations
+
+        This section provides SVD-based movie suggestions.
+
+        -   **Demo Profiles:** Recommendations for these profiles are SVD-generated and then post-filtered by the profile's target genre(s). The userId for each demo profile was selected based on specific criteria to ensure strong genre preference: at least 30 total ratings, ≥20% of ratings in the target genre, ≥50% of those in-genre ratings being 4.0+, and at least 5 high scores (4.0+) in the genre.
+        -   **Manual User ID:** Get general, unfiltered SVD recommendations by entering a MovieLens User ID.
         """)
 
         # 1. Demo Profilleri Tanımlayın 
