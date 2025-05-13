@@ -34,30 +34,6 @@ This project is a comprehensive movie recommendation system that suggests person
 * **Data Visualization (During Analysis Phase):** Matplotlib, Seaborn
 * **Dataset:** [MovieLens 25M Dataset](https://grouplens.org/datasets/movielens/25m/)
 
-## 📂 Project Structure
-.
-├── cleaned_data/           # Preprocessed and cleaned CSV files & trained model (.pkl)
-│   ├── movies_clean.csv
-│   ├── ratings_clean.csv
-│   ├── tags_clean.csv
-│   └── svd_trained_model.pkl
-├── data/                   # Raw MovieLens 25M dataset files
-│   ├── links.csv
-│   ├── movies.csv
-│   ├── ratings.csv
-│   └── tags.csv
-├── src/                    # Source code files
-│   ├── app.py              # Main Streamlit application
-│   ├── preprocess_dataset.py # Data preprocessing script
-│   ├── train_save_model.py # Script for training and saving the SVD model
-│   ├── utils_data.py       # Utility functions for data loading, etc.
-│   ├── analyze_dataset.py  # Exploratory data analysis script (optional execution)
-│   ├── test_movie_rec.py   # Unit tests
-│   └── config.py           # Configuration (API key, mood-genre map)
-└── README.md               # This file
-
-## 🚀 Setup and Installation
-
 1.  **Clone the Repository:**
     ```bash
     git clone [https://github.com/gokturkberke/movie-recommendation-system.git](https://github.com/gokturkberke/movie-recommendation-system.git)
