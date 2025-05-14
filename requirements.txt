@@ -1,0 +1,10 @@
+pandas
+streamlit
+scikit-learn
+surprise
+thefuzz
+requests
+# Eğer başka kütüphaneler de kullanıyorsan (örn: matplotlib, seaborn, numpy vb. analiz veya ön işleme scriptlerinde)
+# onları da buraya eklemelisin. Ancak Streamlit uygulamasının çalışması için
+# doğrudan app.py ve import ettiği modüllerin ihtiyaç duyduğu kütüphaneler önceliklidir.
+# Örneğin, utils_data.py veya recommendations.py'nin import ettiği her şey.
