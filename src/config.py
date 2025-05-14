@@ -13,3 +13,6 @@ MOOD_GENRE_MAP = {
     "thoughtful": ["Documentary", "Drama"],
     "surprised": ["Mystery", "Thriller"],
 }
+
+# Recommendation System Parameters
+INITIAL_CANDIDATE_POOL_SIZE = 300

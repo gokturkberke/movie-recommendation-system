@@ -8,7 +8,7 @@ from scipy.sparse import csr_matrix
 from surprise import dump # Ensure this import is present
 from thefuzz import fuzz
 import requests # Added requests import
-from config import TMDB_API_KEY, MOOD_GENRE_MAP # TMDB_API_KEY'in buradan geldiğini varsayıyorum
+from config import TMDB_API_KEY, MOOD_GENRE_MAP, INITIAL_CANDIDATE_POOL_SIZE # TMDB_API_KEY'in buradan geldiğini varsayıyorum
 from utils_data import (
     load_movies,
     load_ratings,
@@ -81,55 +81,102 @@ def get_tfidf_matrix(movies, tags):
 
     return tfidf_matrix, tfidf, movies
 
-def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, watched_titles, top_n=10):
+def _get_raw_svd_predictions(user_id, surprise_model, movies_df, ratings_df, candidate_pool_size=None):
+    """
+    Helper function to get raw SVD predictions for a user.
+    Returns a DataFrame with 'movieId' and 'predicted_score'.
+    """
     all_movie_ids = movies_df['movieId'].unique()
 
     user_rated_movie_ids = []
     if ratings_df is not None and not ratings_df.empty:
         user_rated_movie_ids = ratings_df[ratings_df['userId'] == user_id]['movieId'].unique()
     else:
-        print("Warning: Ratings data is not available or empty in get_user_recommendations.")
+        print("Warning: Ratings data is not available or empty in _get_raw_svd_predictions.")
 
-    predictions = []
-    unrated_movie_ids = [mid for mid in all_movie_ids if mid not in user_rated_movie_ids]
+    movies_to_predict_ids = [mid for mid in all_movie_ids if mid not in user_rated_movie_ids]
 
-    for movie_id in unrated_movie_ids:
-        pred = surprise_model.predict(uid=user_id, iid=movie_id)
-        predictions.append((movie_id, pred.est))
+    if not movies_to_predict_ids:
+        print(f"User {user_id} has no new movies to predict for (they may have rated all movies).")
+        return pd.DataFrame(columns=['movieId', 'predicted_score'])
 
-    predictions.sort(key=lambda x: x[1], reverse=True)
+    predictions_list = []
+    for movie_id_to_predict in movies_to_predict_ids:
+        predicted_rating = surprise_model.predict(uid=user_id, iid=movie_id_to_predict).est
+        predictions_list.append({'movieId': movie_id_to_predict, 'predicted_score': predicted_rating})
 
-    num_candidates_to_fetch = top_n + (len(watched_titles) if watched_titles else 0) + 20
-    candidate_movie_ids_ordered = [movie_id for movie_id, score in predictions[:num_candidates_to_fetch]]
+    if not predictions_list:
+        return pd.DataFrame(columns=['movieId', 'predicted_score'])
 
+    predictions_df = pd.DataFrame(predictions_list)
+    predictions_df.sort_values(by='predicted_score', ascending=False, inplace=True)
+    
+    if candidate_pool_size:
+        return predictions_df.head(candidate_pool_size)
+    return predictions_df
+
+def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, watched_titles, top_n=10):
+    # Determine the number of candidates to fetch, considering watched titles for potential exclusion later
+    # This aims to ensure we have enough *net new* recommendations after filtering.
+    # The candidate_pool_size for raw predictions can be larger than top_n + len(watched_titles)
+    # to give more room for subsequent filtering and to ensure diversity.
+    # Let's use a slightly larger pool than strictly necessary, e.g., top_n + len(watched_titles) + a buffer.
+    # Or, we can fetch a fixed larger number like INITIAL_CANDIDATE_POOL_SIZE if that's deemed sufficient.
+    # For this refactoring, let's use a dynamic size based on top_n and watched_titles, plus a buffer.
+    num_candidates_to_fetch = top_n + (len(watched_titles) if watched_titles else 0) + 20 
+
+    raw_predictions_df = _get_raw_svd_predictions(user_id, surprise_model, movies_df, ratings_df, candidate_pool_size=num_candidates_to_fetch)
+
+    if raw_predictions_df.empty:
+        return pd.DataFrame(columns=['movieId', 'title', 'genres'] + (['tmdbId'] if 'tmdbId' in movies_df.columns else []))
+
+    # Merge with movie details
     cols_to_return = ['movieId', 'title', 'genres']
     if 'tmdbId' in movies_df.columns:
         cols_to_return.append('tmdbId')
+    
+    # Ensure we only try to merge with columns that exist in movies_df
+    valid_cols_for_merge = [col for col in cols_to_return if col in movies_df.columns]
+    if 'movieId' not in valid_cols_for_merge: # movieId is essential for merge
+        valid_cols_for_merge.insert(0, 'movieId')
+        valid_cols_for_merge = list(set(valid_cols_for_merge))
 
-    if not candidate_movie_ids_ordered:
-        return pd.DataFrame(columns=cols_to_return)
 
-    recommended_movies_df = movies_df[movies_df['movieId'].isin(candidate_movie_ids_ordered)][cols_to_return].copy()
-
-    if watched_titles and not recommended_movies_df.empty:
+    recommended_movies_df = pd.merge(
+        raw_predictions_df[['movieId']], # Only need movieId for merging initially
+        movies_df[valid_cols_for_merge],
+        on='movieId',
+        how='left'
+    )
+    
+    # Filter out watched titles
+    if watched_titles and not recommended_movies_df.empty and 'title' in recommended_movies_df.columns:
         recommended_movies_df = recommended_movies_df[~recommended_movies_df['title'].isin(watched_titles)]
 
-    if not recommended_movies_df.empty:
-        final_candidate_ids_in_order = [
-            mid for mid in candidate_movie_ids_ordered
-            if mid in recommended_movies_df['movieId'].values
-        ]
-        if final_candidate_ids_in_order:
-            recommended_movies_df = recommended_movies_df.set_index('movieId').loc[final_candidate_ids_in_order].reset_index()
-            for col in cols_to_return:
-                if col not in recommended_movies_df.columns:
-                     recommended_movies_df[col] = pd.NA
-        else:
-             recommended_movies_df = pd.DataFrame(columns=cols_to_return)
-    else:
-        recommended_movies_df = pd.DataFrame(columns=cols_to_return)
+    # Re-order based on original prediction scores if necessary, though merge usually preserves left df order
+    # If raw_predictions_df was already sorted, and merge was 'left', order should be mostly fine.
+    # However, to be absolutely sure, we can re-apply the order from raw_predictions_df
+    # This requires 'movieId' to be in recommended_movies_df
+    if not recommended_movies_df.empty and 'movieId' in recommended_movies_df.columns:
+        # Create a mapping of movieId to its original sort order from raw_predictions_df
+        order_map = {movie_id: i for i, movie_id in enumerate(raw_predictions_df['movieId'])}
+        # Filter recommended_movies_df to only include movies that are in the order_map
+        # (handles cases where some movies might have been dropped if not in movies_df)
+        recommended_movies_df = recommended_movies_df[recommended_movies_df['movieId'].isin(order_map)]
 
-    return recommended_movies_df[cols_to_return].head(top_n)
+        if not recommended_movies_df.empty: # Check again after filtering
+            recommended_movies_df['sort_order'] = recommended_movies_df['movieId'].map(order_map)
+            recommended_movies_df.sort_values('sort_order', inplace=True)
+            recommended_movies_df.drop(columns=['sort_order'], inplace=True)
+
+
+    # Ensure all expected columns are present before returning
+    final_cols_to_return = ['movieId', 'title', 'genres'] + (['tmdbId'] if 'tmdbId' in movies_df.columns else [])
+    for col in final_cols_to_return:
+        if col not in recommended_movies_df.columns:
+            recommended_movies_df[col] = pd.NA # Or some other appropriate default
+
+    return recommended_movies_df[final_cols_to_return].head(top_n)
 
 
 def get_filtered_svd_recommendations_for_persona(
@@ -139,107 +186,93 @@ def get_filtered_svd_recommendations_for_persona(
     movies_data,               # one-hot encoded genre'ları içeren ana movies DataFrame'i
     ratings_data,              # tam ratings DataFrame'i (veya modelin eğitildiği veri)
     watched_titles,            # Kullanıcının genel izleme geçmişi (başlıklar)
-    top_n_final=10,
-    initial_candidate_pool_size=300
+    top_n_final=10
+    # initial_candidate_pool_size is now imported from config
 ):
     """
     SVD önerilerini alır, belirtilen persona hedef türlerine göre filtreler
     ve izlenmiş filmleri çıkarır. Sonuç olarak bir DataFrame döndürür.
     """
-    # Gerekli tür sütunlarının varlığını kontrol et
-    for genre_col in persona_target_genre_cols:
-        if genre_col not in movies_data.columns:
-            st.error(f"Error: Column '{genre_col}' not found in movies_data DataFrame. "
-                     f"Please check your 'movies_clean.csv' and preprocessing script to ensure "
-                     f"one-hot encoded genre columns (e.g., 'genre_comedy') exist.")
-            return pd.DataFrame()
-
-    # 1. SVD'den ham tahminleri al
-    all_movie_ids_in_moviedata = movies_data['movieId'].unique()
-    
-    user_rated_movie_ids = []
-    if ratings_data is not None and not ratings_data.empty:
-        user_rated_movie_ids = ratings_data[ratings_data['userId'] == user_id]['movieId'].unique()
-
-    movies_to_predict_ids = [movie_id for movie_id in all_movie_ids_in_moviedata if movie_id not in user_rated_movie_ids]
-
-    if not movies_to_predict_ids:
-        print(f"User {user_id} has no new movies to predict for (they may have rated all movies).")
-        return pd.DataFrame()
-
-    predictions_list = [] 
-    for movie_id_to_predict in movies_to_predict_ids:
-        predicted_rating = model.predict(uid=user_id, iid=movie_id_to_predict).est # uid ve iid parametrelerini doğru kullandığınızdan emin olun
-        predictions_list.append({'movieId': movie_id_to_predict, 'predicted_score': predicted_rating})
-    
-    if not predictions_list:
-        return pd.DataFrame()
-
-    predictions_df = pd.DataFrame(predictions_list)
-    predictions_df.sort_values(by='predicted_score', ascending=False, inplace=True)
-
-    # 2. Filtreleme için ilk adayları seç
-    candidate_movies_df = predictions_df.head(initial_candidate_pool_size)
-
-    # 3. Adayları film detayları (movieId, title, genres, tmdbId ve hedef tür sütunları) ile birleştir
-    # movies_data'dan birleştirilecek sütunları belirle
+    # Define columns to bring from movies_data at the beginning
     cols_to_bring_from_movies_data = ['movieId', 'title', 'genres']
     if 'tmdbId' in movies_data.columns:
         cols_to_bring_from_movies_data.append('tmdbId')
     
-    # Hedef tür sütunlarını da ekle (varsa)
+    # Add persona target genre columns to the list of columns to bring, if they exist in movies_data
     for gc in persona_target_genre_cols:
         if gc in movies_data.columns and gc not in cols_to_bring_from_movies_data:
             cols_to_bring_from_movies_data.append(gc)
-            
+        elif gc not in movies_data.columns:
+            st.error(f"Error: Persona target genre column '{gc}' not found in movies_data DataFrame. "
+                     f"Please check your 'movies_clean.csv' and preprocessing script to ensure "
+                     f"one-hot encoded genre columns (e.g., 'genre_comedy') exist.")
+            return pd.DataFrame()
+
+
+    # 1. Get raw SVD predictions using the helper function and INITIAL_CANDIDATE_POOL_SIZE from config
+    raw_predictions_df = _get_raw_svd_predictions(user_id, model, movies_data, ratings_data, candidate_pool_size=INITIAL_CANDIDATE_POOL_SIZE)
+
+    if raw_predictions_df.empty:
+        return pd.DataFrame() # Return empty df with appropriate columns later if needed
+
+    # 2. Merge raw predictions with movie details (including genre columns for filtering)
+    # We only need 'movieId' and 'predicted_score' from raw_predictions_df for the merge,
+    # and the specified columns from movies_data.
     candidate_movies_with_details = pd.merge(
-        candidate_movies_df[['movieId', 'predicted_score']], 
-        movies_data[cols_to_bring_from_movies_data], 
+        raw_predictions_df[['movieId', 'predicted_score']], 
+        movies_data[cols_to_bring_from_movies_data], # Use the predefined list
         on='movieId',
-        how='left'
+        how='left' # Keep all predictions, fill missing movie details with NaN if any (should not happen with clean data)
     )
     
-    # Birleştirme sonrası NaN olan hedef tür sütunlarını 0 ile doldur
+    # Fill NaN in genre columns that were merged (important for the sum operation later)
+    # This step ensures that if a movie somehow didn't have a value for a genre_col after merge, it's treated as 0.
     for genre_col in persona_target_genre_cols:
         if genre_col in candidate_movies_with_details.columns: 
             candidate_movies_with_details[genre_col] = candidate_movies_with_details[genre_col].fillna(0).astype(int)
-        # else: # Bu sütun movies_data'da yoksa, yukarıdaki kontrol zaten hata vermiştir.
 
-    # 4. Hedef türlere göre filtrele
+    # 3. Filter by persona target genres
     if persona_target_genre_cols: 
-        valid_persona_genre_cols = [col for col in persona_target_genre_cols if col in candidate_movies_with_details.columns]
-        if not valid_persona_genre_cols:
-             st.warning("No valid target genre columns found in candidate movies for filtering. Showing unfiltered SVD recommendations.")
-             filtered_recommendations_df = candidate_movies_with_details.copy() # Filtresiz devam et
+        # Ensure we only use genre columns that are actually present in the merged DataFrame
+        valid_persona_genre_cols_for_filtering = [col for col in persona_target_genre_cols if col in candidate_movies_with_details.columns]
+        
+        if not valid_persona_genre_cols_for_filtering:
+             st.warning("No valid target persona genre columns found in candidate movies for filtering. Showing unfiltered SVD recommendations (but still excluding watched).")
+             filtered_recommendations_df = candidate_movies_with_details.copy() 
         else:
-            filter_mask = candidate_movies_with_details[valid_persona_genre_cols].sum(axis=1) > 0
+            # Movies must have at least one of the target persona genres
+            filter_mask = candidate_movies_with_details[valid_persona_genre_cols_for_filtering].sum(axis=1) > 0
             filtered_recommendations_df = candidate_movies_with_details[filter_mask]
     else: 
+        # No persona genres specified, so no genre filtering
         filtered_recommendations_df = candidate_movies_with_details.copy()
 
     if filtered_recommendations_df.empty:
-        print(f"No movies found for User ID {user_id} matching persona genres from the initial SVD pool.")
-        return pd.DataFrame()
+        print(f"No movies found for User ID {user_id} matching persona genres from the SVD pool (or pool was empty).")
+        return pd.DataFrame() # Consider returning with specific columns
         
-    # 5. İzlenmiş filmleri (başlığa göre) çıkar
+    # 4. Filter out watched movies (by title)
     if watched_titles and not filtered_recommendations_df.empty:
         if 'title' in filtered_recommendations_df.columns:
             filtered_recommendations_df = filtered_recommendations_df[
                 ~filtered_recommendations_df['title'].isin(watched_titles)
             ]
-        # else: # 'title' sütunu yoksa filtreleme yapılamaz, bu durum yukarıda merge'de ele alınmalı
+        # else: 'title' column should exist due to cols_to_bring_from_movies_data
 
-    # 6. Sonuçları SVD tahmin skoruna göre sıralı tutarak top_n_final kadar al
+    # 5. Get the top N results, already sorted by 'predicted_score' from _get_raw_svd_predictions
     final_df_to_show = filtered_recommendations_df.head(top_n_final)
     
-    # Gerekli sütunları döndür (predicted_score da faydalı olabilir)
-    output_cols = ['movieId', 'title', 'genres', 'predicted_score']
+    # 6. Define and ensure final output columns
+    output_cols = ['movieId', 'title', 'genres', 'predicted_score'] # 'predicted_score' is useful for context
     if 'tmdbId' in movies_data.columns and 'tmdbId' not in output_cols : 
         output_cols.append('tmdbId')
 
-    final_df_to_show = final_df_to_show[[col for col in output_cols if col in final_df_to_show.columns]]
+    # Ensure all desired output columns are present, adding them with NA if missing
+    for col in output_cols:
+        if col not in final_df_to_show.columns:
+            final_df_to_show[col] = pd.NA
 
-    return final_df_to_show.reset_index(drop=True)
+    return final_df_to_show[[col for col in output_cols if col in final_df_to_show.columns]].reset_index(drop=True)
 
 def recommend_by_mood(mood, movies, watched_movies, top_n=10):
     genres_for_mood = MOOD_GENRE_MAP.get(mood.lower())
@@ -797,8 +830,7 @@ def main():
                                 movies_data=movies, # Ana movies DataFrame'i (one-hot genre'lı)
                                 ratings_data=ratings, # Tam ratings DataFrame'i
                                 watched_titles=st.session_state.get('watched_movies', set()),
-                                top_n_final=10,
-                                initial_candidate_pool_size=300 # Jupyter'daki gibi
+                                top_n_final=10
                             )
                         elif chosen_profile_name == "Select a Demo Profile..." and user_id_to_process is not None: # Manuel ID girilmişse (filtresiz)
                              st.markdown(f"### Showing General SVD Recommendations for User ID: {user_id_to_process}")
