@@ -305,8 +305,10 @@ def recommend_by_mood(mood, movies, watched_movies, top_n=10):
 
     return recommendations.head(top_n).reset_index(drop=True)
 
-def pick_random_movie(movies):
-    return movies.sample(n=1).iloc[0]
+def pick_random_movie(movies_df):
+    if movies_df.empty:
+        return None # Return None if the DataFrame is empty
+    return movies_df.sample(n=1).iloc[0]
 
 def _extract_watched_movies_and_genres(watched_titles, movies_input_df, similarity_threshold=85):
     all_genres = set()
@@ -465,32 +467,47 @@ def recommend_similar_movies_partial(
     movies_with_content_for_tfidf['title_for_matching'] = movies_with_content_for_tfidf['title_for_matching'].fillna('').astype(str)
     matches = movies_with_content_for_tfidf[movies_with_content_for_tfidf['title_for_matching'].str.contains(cleaned_movie_title, na=False)]
 
+    matched_movie_original_title = None # Initialize
+
     if matches.empty:
         best_fuzz_score = 0
         best_fuzz_idx = -1
-        for idx_val, row_title in movies_with_content_for_tfidf['title_for_matching'].items():
-            score = fuzz.ratio(cleaned_movie_title, row_title)
+        # Ensure 'title_for_matching' is used for fuzzy matching if it exists and is prepared
+        # The fuzzy matching should iterate over the same source that tfidf_matrix is based on.
+        for idx_val, row_title_for_matching in movies_with_content_for_tfidf['title_for_matching'].items():
+            score = fuzz.ratio(cleaned_movie_title, row_title_for_matching) # Compare with cleaned title_for_matching
             if score > best_fuzz_score:
                 best_fuzz_score = score
-                best_fuzz_idx = idx_val
+                best_fuzz_idx = idx_val # Store the index from movies_with_content_for_tfidf
 
-        if best_fuzz_score > 80:
+        if best_fuzz_score > 80 and best_fuzz_idx != -1:
             matches = movies_with_content_for_tfidf.loc[[best_fuzz_idx]]
+            # matched_movie_original_title would be set after idx is determined from 'matches'
         else:
-            return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
+            return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None # No good match found
 
-    idx = matches.index[0]
+    # This check should be after 'matches' is confirmed to be non-empty
+    if matches.empty: # Should not be hit if logic above is correct, but as a safeguard
+        return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
+
+    idx = matches.index[0] # Index from movies_with_content_for_tfidf
+    
+    # Determine matched_movie_original_title using the 'movieId' from the TF-IDF source DF
+    # and looking it up in the 'movies_for_output_columns' DF.
     matched_movie_id_from_tfidf_source = movies_with_content_for_tfidf.loc[idx, 'movieId']
 
     if 'movieId' not in movies_for_output_columns.columns or 'title' not in movies_for_output_columns.columns:
         st.error("Critical: 'movieId' or 'title' not in the DataFrame for output columns.")
-        matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title']
+        # Fallback to title from the tfidf source if output df is problematic
+        matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title'] if 'title' in movies_with_content_for_tfidf else "Title Unavailable"
     else:
         matched_movie_row_for_display = movies_for_output_columns[movies_for_output_columns['movieId'] == matched_movie_id_from_tfidf_source]
         if matched_movie_row_for_display.empty:
-            matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title']
+            # Fallback if movieId not found in output_df, though this indicates a data consistency issue
+            matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title'] if 'title' in movies_with_content_for_tfidf else "Title Unavailable"
         else:
             matched_movie_original_title = matched_movie_row_for_display['title'].iloc[0]
+
 
     cosine_sim_vector = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
 
@@ -957,82 +974,161 @@ def main():
 
     # =================== RANDOM MOVIE ===================
     elif choice == menu[3]:
-        st.success("**Random Movie**")
-        if st.button("Pick a Random Movie", key="random_movie_button_v2"): # Yeni key
-            if not movies.empty:
-                movie_picked = pick_random_movie(movies)
-                st.info(f"**Title:** {movie_picked['title']}")
-                st.info(f"**Genres:** {movie_picked['genres']}")
+        st.success("**Random Movie Recommendation**")
 
-                tmdb_id_to_fetch = None
-                if 'tmdbId' in movie_picked and pd.notna(movie_picked['tmdbId']):
-                    tmdb_id_to_fetch = int(movie_picked['tmdbId'])
-                elif 'movieId' in movie_picked and pd.notna(movie_picked['movieId']) and (links_df is not None and not links_df.empty):
-                    link_info = links_df[links_df['movieId'] == movie_picked['movieId']]
-                    if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
-                        tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+        # Get available genres for the filter
+        available_genres = []
+        if not movies.empty and 'genres' in movies.columns:
+            all_genres_list = movies['genres'].str.split('|').explode().str.strip().unique()
+            available_genres = sorted([genre for genre in all_genres_list if genre and genre != '(no genres listed)'])
+        
+        selected_genres_for_random = []
+        if available_genres:
+            selected_genres_for_random = st.multiselect(
+                "Filter by Genre(s) (optional):",
+                options=available_genres,
+                key="random_movie_genre_filter_multiselect_v1"
+            )
+        else:
+            st.caption("No genres available for filtering or movies data is not loaded correctly.")
 
-                if tmdb_id_to_fetch:
-                    movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
-                    if movie_details and movie_details.get("poster_url"):
-                        st.image(movie_details["poster_url"], width=200)
-                    if movie_details and movie_details.get("overview"):
-                        st.caption(f"Overview: {movie_details['overview']}")
-                    elif movie_details:
-                        st.caption("Poster or overview not available on TMDB.")
+        if st.button("Pick a Random Movie", key="random_movie_button_v3"): 
+            filtered_movies_for_random = movies.copy()
+            
+            if selected_genres_for_random:
+                # Filter movies that contain AT LEAST ONE of the selected genres
+                # This requires genres to be in string format and then checking for substring presence for each selected genre
+                # A movie is kept if any of its genres match any of the selected genres.
+                # We assume genres in the DataFrame are like "Action|Adventure|Sci-Fi"
+                
+                # Create a boolean mask, True for rows that match at least one selected genre
+                genre_mask = pd.Series([False] * len(filtered_movies_for_random), index=filtered_movies_for_random.index)
+                for genre_filter in selected_genres_for_random:
+                    # Ensure case-insensitivity if needed, though genre list is usually consistent
+                    genre_mask |= filtered_movies_for_random['genres'].str.contains(genre_filter, case=False, na=False)
+                
+                filtered_movies_for_random = filtered_movies_for_random[genre_mask]
+
+            if not filtered_movies_for_random.empty:
+                movie_picked = pick_random_movie(filtered_movies_for_random) # pick_random_movie now handles empty df
+                
+                if movie_picked is not None:
+                    st.info(f"**Title:** {movie_picked.get('title', 'N/A')}")
+                    st.info(f"**Genres:** {movie_picked.get('genres', 'N/A')}")
+
+                    tmdb_id_to_fetch = None
+                    if 'tmdbId' in movie_picked and pd.notna(movie_picked['tmdbId']):
+                        tmdb_id_to_fetch = int(movie_picked['tmdbId'])
+                    elif 'movieId' in movie_picked and pd.notna(movie_picked['movieId']) and (links_df is not None and not links_df.empty):
+                        link_info = links_df[links_df['movieId'] == movie_picked['movieId']]
+                        if not link_info.empty and 'tmdbId' in link_info.columns and pd.notna(link_info.iloc[0]['tmdbId']):
+                            tmdb_id_to_fetch = int(link_info.iloc[0]['tmdbId'])
+
+                    if tmdb_id_to_fetch:
+                        movie_details = get_movie_details_from_tmdb(tmdb_id_to_fetch, TMDB_API_KEY)
+                        if movie_details and movie_details.get("poster_url"):
+                            st.image(movie_details["poster_url"], width=200)
+                        if movie_details and movie_details.get("overview"):
+                            st.caption(f"Overview: {movie_details['overview']}")
+                        elif movie_details: # Details fetched but no poster/overview
+                            st.caption("Poster or overview not available on TMDB.")
+                        else: # No details fetched
+                            st.caption("Details could not be retrieved from TMDB.")
                     else:
-                        st.caption("Details not found on TMDB.")
-                else:
-                    st.caption("TMDB ID not found for this movie, so poster and overview cannot be displayed.")
+                        st.caption("TMDB ID not found for this movie, so poster and overview cannot be displayed.")
+                else: # movie_picked was None
+                    st.warning("Could not pick a random movie from the filtered selection (it might be empty after filtering).")
             else:
-                st.warning("No movies available to pick from.")
+                if selected_genres_for_random:
+                    st.warning(f"No movies found matching the selected genre(s): {', '.join(selected_genres_for_random)}. Try different genres or no filter.")
+                else:
+                    st.warning("No movies available in the database to pick from.")
 
     # =================== WATCH HISTORY & RECOMMENDATIONS ===================
     elif choice == menu[4]:
         st.success("**Watch History & Personalized Recommendations**")
 
+        # Initialize session state for watched_movies if it doesn't exist
+        if 'watched_movies' not in st.session_state:
+            st.session_state.watched_movies = set()
+
         if not movies.empty and 'title' in movies.columns:
             all_movie_titles = movies['title'].dropna().sort_values().unique().tolist()
             selectable_movies = [
                 title for title in all_movie_titles
-                if title not in st.session_state.get('watched_movies', set())
+                if title not in st.session_state.watched_movies # Use .watched_movies directly
             ]
         else:
             selectable_movies = []
+            all_movie_titles = [] # Ensure it's defined
 
         if selectable_movies:
+            # Key for multiselect should be consistent if its value is read from st.session_state directly
+            # Using a more descriptive key for the widget itself if needed, e.g., "add_to_watch_history_multiselect"
+            # The state is accessed via st.session_state[key_name]
             st.multiselect(
                 "Select movies to add to your watch history:",
                 options=selectable_movies,
-                key="add_selected_movies_multiselect_v2" # Yeni key
+                key="multiselect_add_watched_movies_key" 
             )
-            if st.button("Add Selected to Watch History", key="add_selected_to_watch_history_button_v2"): # Yeni key
-                selected_movies_to_add = st.session_state.add_selected_movies_multiselect_v2 # Key'i burada da güncelle
+            if st.button("Add Selected to Watch History", key="add_selected_to_watch_history_button_v3"): # New key
+                selected_movies_to_add = st.session_state.multiselect_add_watched_movies_key
                 if selected_movies_to_add:
                     for movie_title_add in selected_movies_to_add:
-                        st.session_state['watched_movies'].add(movie_title_add)
+                        st.session_state.watched_movies.add(movie_title_add)
                     st.success(f"{len(selected_movies_to_add)} movie(s) added to your watch history.")
-                    st.session_state.movies_added_to_watch_history_flag = True
+                    # st.session_state.movies_added_to_watch_history_flag = True # This flag might not be necessary if rerun is used
                     st.rerun()
                 else:
                     st.warning("Please select at least one movie to add.")
-        elif not movies.empty and 'title' in movies.columns and not all_movie_titles:
+        elif not movies.empty and 'title' in movies.columns and not all_movie_titles: # Corrected condition
              st.warning("Movie list is empty or contains no valid titles to select from.")
         elif movies.empty or 'title' not in movies.columns:
             st.warning("Movie list is not available to make selections.")
-        else:
-            st.info("No new movies available to add to watch history (either all are watched or the movie list is empty).")
+        else: # This means selectable_movies is empty but all_movie_titles is not, so all movies are watched
+            st.info("All movies from the list are already in your watch history or the movie list is empty.")
 
-        if st.session_state.get('watched_movies', set()):
+
+        if st.session_state.watched_movies: # Check if the set itself is not empty
             st.write("Your current watch history:")
-            watched_df = pd.DataFrame(list(st.session_state['watched_movies']), columns=['Title'])
-            watched_df.index = range(1, len(watched_df) + 1)
-            st.dataframe(watched_df, height=min(300, len(watched_df) * 40))
+            # Sort the list for consistent display and use in multiselect for removal
+            watched_list_for_df = sorted(list(st.session_state.watched_movies))
+            
+            # Display DataFrame
+            watched_df = pd.DataFrame(watched_list_for_df, columns=['Title'])
+            watched_df.index = range(1, len(watched_df) + 1) # 1-based indexing
+            st.dataframe(watched_df, height=min(300, len(watched_df) * 40 + 40), use_container_width=True)
+
+            # --- Add section to remove movies from watch history ---
+            st.markdown("---") 
+            st.subheader("Manage Your Watch History")
+            
+            if watched_list_for_df: # Check if there's anything to remove
+                movies_to_remove_selection = st.multiselect(
+                    "Select movies to remove from your watch history:",
+                    options=watched_list_for_df, 
+                    key="multiselect_remove_watched_movies_key" # Unique key for this multiselect
+                )
+                if st.button("Remove Selected from Watch History", key="remove_selected_from_watch_history_button_v3"): # New unique key
+                    if movies_to_remove_selection:
+                        removed_count = 0
+                        for movie_title_remove in movies_to_remove_selection:
+                            if movie_title_remove in st.session_state.watched_movies:
+                                st.session_state.watched_movies.remove(movie_title_remove)
+                                removed_count += 1
+                        if removed_count > 0:
+                            st.success(f"{removed_count} movie(s) removed from your watch history.")
+                            st.rerun() 
+                        else:
+                            st.info("Selected movies were not found in the current watch history (perhaps selection was cleared or they were already removed).")
+                    else:
+                        st.warning("Please select at least one movie to remove.")
+            # --- End of remove section ---
         else:
             st.info("Your watch history is currently empty. Add movies using the selection field above.")
 
-        if st.button("Get Recommendations Based on Watch History", key="get_recs_watch_history_button_v2"): # Yeni key
-            watched_titles_set = st.session_state.get('watched_movies', set())
+        if st.button("Get Recommendations Based on Watch History", key="get_recs_watch_history_button_v3"): # New key
+            watched_titles_set = st.session_state.watched_movies
             if not watched_titles_set:
                 st.warning("Your watch history is empty. Please add some movies to get personalized suggestions.")
             else:
