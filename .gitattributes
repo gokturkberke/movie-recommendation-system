@@ -1,0 +1,16 @@
+cleaned_data/tags_clean.csv filter=lfs diff=lfs merge=lfs -text
+data/tags.csv filter=lfs diff=lfs merge=lfs -text
+ör: filter=lfs diff=lfs merge=lfs -text
+data/ratings.csv filter=lfs diff=lfs merge=lfs -text
+ana filter=lfs diff=lfs merge=lfs -text
+dizindeyse, filter=lfs diff=lfs merge=lfs -text
+değilse filter=lfs diff=lfs merge=lfs -text
+doğru filter=lfs diff=lfs merge=lfs -text
+\# filter=lfs diff=lfs merge=lfs -text
+Eğer filter=lfs diff=lfs merge=lfs -text
+dosya filter=lfs diff=lfs merge=lfs -text
+yolu filter=lfs diff=lfs merge=lfs -text
+yazın, filter=lfs diff=lfs merge=lfs -text
+cleaned_data/ratings_clean.csv filter=lfs diff=lfs merge=lfs -text
+models/svd_trained_model.pkl filter=lfs diff=lfs merge=lfs -text
+cleaned_data/svd_trained_model.pkl filter=lfs diff=lfs merge=lfs -text
