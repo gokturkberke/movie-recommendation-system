@@ -50,14 +50,8 @@ def get_tfidf_matrix(movies, tags):
     return tfidf_matrix, tfidf, movies
 
 def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, watched_titles, top_n=10):
-    # Determine the number of candidates to fetch, considering watched titles for potential exclusion later
-    # This aims to ensure we have enough *net new* recommendations after filtering.
-    # The candidate_pool_size for raw predictions can be larger than top_n + len(watched_titles)
-    # to give more room for subsequent filtering and to ensure diversity.
-    # Let's use a slightly larger pool than strictly necessary, e.g., top_n + len(watched_titles) + a buffer.
-    # Or, we can fetch a fixed larger number like INITIAL_CANDIDATE_POOL_SIZE if that's deemed sufficient.
-    # For this refactoring, let's use a dynamic size based on top_n and watched_titles, plus a buffer.
-    num_candidates_to_fetch = top_n + (len(watched_titles) if watched_titles else 0) + 20 
+    # Determine the number of candidates to fetch
+    num_candidates_to_fetch = top_n + (len(watched_titles) if watched_titles else 0) + 20
 
     raw_predictions_df = _get_raw_svd_predictions(user_id, surprise_model, movies_df, ratings_df, candidate_pool_size=num_candidates_to_fetch)
 
@@ -68,8 +62,7 @@ def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, wat
     cols_to_return = ['movieId', 'title', 'genres']
     if 'tmdbId' in movies_df.columns:
         cols_to_return.append('tmdbId')
-    
-    # Ensure we only try to merge with columns that exist in movies_df
+
     valid_cols_for_merge = [col for col in cols_to_return if col in movies_df.columns]
     if 'movieId' not in valid_cols_for_merge: # movieId is essential for merge
         valid_cols_for_merge.insert(0, 'movieId')
@@ -77,28 +70,22 @@ def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, wat
 
 
     recommended_movies_df = pd.merge(
-        raw_predictions_df[['movieId']], # Only need movieId for merging initially
+        raw_predictions_df[['movieId']],
         movies_df[valid_cols_for_merge],
         on='movieId',
         how='left'
     )
-    
+
     # Filter out watched titles
     if watched_titles and not recommended_movies_df.empty and 'title' in recommended_movies_df.columns:
         recommended_movies_df = recommended_movies_df[~recommended_movies_df['title'].isin(watched_titles)]
 
-    # Re-order based on original prediction scores if necessary, though merge usually preserves left df order
-    # If raw_predictions_df was already sorted, and merge was 'left', order should be mostly fine.
-    # However, to be absolutely sure, we can re-apply the order from raw_predictions_df
-    # This requires 'movieId' to be in recommended_movies_df
+    # Re-order based on original prediction scores
     if not recommended_movies_df.empty and 'movieId' in recommended_movies_df.columns:
-        # Create a mapping of movieId to its original sort order from raw_predictions_df
         order_map = {movie_id: i for i, movie_id in enumerate(raw_predictions_df['movieId'])}
-        # Filter recommended_movies_df to only include movies that are in the order_map
-        # (handles cases where some movies might have been dropped if not in movies_df)
         recommended_movies_df = recommended_movies_df[recommended_movies_df['movieId'].isin(order_map)]
 
-        if not recommended_movies_df.empty: # Check again after filtering
+        if not recommended_movies_df.empty:
             recommended_movies_df['sort_order'] = recommended_movies_df['movieId'].map(order_map)
             recommended_movies_df.sort_values('sort_order', inplace=True)
             recommended_movies_df.drop(columns=['sort_order'], inplace=True)
@@ -108,31 +95,28 @@ def get_user_recommendations(user_id, surprise_model, movies_df, ratings_df, wat
     final_cols_to_return = ['movieId', 'title', 'genres'] + (['tmdbId'] if 'tmdbId' in movies_df.columns else [])
     for col in final_cols_to_return:
         if col not in recommended_movies_df.columns:
-            recommended_movies_df[col] = pd.NA # Or some other appropriate default
+            recommended_movies_df[col] = pd.NA
 
     return recommended_movies_df[final_cols_to_return].head(top_n)
 
 
 def get_filtered_svd_recommendations_for_persona(
     user_id,
-    persona_target_genre_cols, # ['genre_comedy'], ['genre_action', 'genre_adventure'] gibi
+    persona_target_genre_cols, # e.g., ['genre_comedy'], ['genre_action', 'genre_adventure']
     model,                     # surprise_model
-    movies_data,               # one-hot encoded genre'ları içeren ana movies DataFrame'i
-    ratings_data,              # tam ratings DataFrame'i (veya modelin eğitildiği veri)
-    watched_titles,            # Kullanıcının genel izleme geçmişi (başlıklar)
+    movies_data,               # main movies DataFrame with one-hot encoded genres
+    ratings_data,              # full ratings DataFrame
+    watched_titles,            # user's general watch history (titles)
     top_n_final=10
-    # initial_candidate_pool_size is now imported from config
 ):
     """
-    SVD önerilerini alır, belirtilen persona hedef türlerine göre filtreler
-    ve izlenmiş filmleri çıkarır. Sonuç olarak bir DataFrame döndürür.
+    Gets SVD recommendations, filters by specified persona target genres,
+    and removes watched movies. Returns a DataFrame.
     """
-    # Define columns to bring from movies_data at the beginning
     cols_to_bring_from_movies_data = ['movieId', 'title', 'genres']
     if 'tmdbId' in movies_data.columns:
         cols_to_bring_from_movies_data.append('tmdbId')
-    
-    # Add persona target genre columns to the list of columns to bring, if they exist in movies_data
+
     for gc in persona_target_genre_cols:
         if gc in movies_data.columns and gc not in cols_to_bring_from_movies_data:
             cols_to_bring_from_movies_data.append(gc)
@@ -143,65 +127,56 @@ def get_filtered_svd_recommendations_for_persona(
             return pd.DataFrame()
 
 
-    # 1. Get raw SVD predictions using the helper function and INITIAL_CANDIDATE_POOL_SIZE from config
+    # 1. Get raw SVD predictions
     raw_predictions_df = _get_raw_svd_predictions(user_id, model, movies_data, ratings_data, candidate_pool_size=INITIAL_CANDIDATE_POOL_SIZE)
 
     if raw_predictions_df.empty:
-        return pd.DataFrame() # Return empty df with appropriate columns later if needed
+        return pd.DataFrame()
 
-    # 2. Merge raw predictions with movie details (including genre columns for filtering)
-    # We only need 'movieId' and 'predicted_score' from raw_predictions_df for the merge,
-    # and the specified columns from movies_data.
+    # 2. Merge raw predictions with movie details
     candidate_movies_with_details = pd.merge(
-        raw_predictions_df[['movieId', 'predicted_score']], 
-        movies_data[cols_to_bring_from_movies_data], # Use the predefined list
+        raw_predictions_df[['movieId', 'predicted_score']],
+        movies_data[cols_to_bring_from_movies_data],
         on='movieId',
-        how='left' # Keep all predictions, fill missing movie details with NaN if any (should not happen with clean data)
+        how='left'
     )
-    
-    # Fill NaN in genre columns that were merged (important for the sum operation later)
-    # This step ensures that if a movie somehow didn't have a value for a genre_col after merge, it's treated as 0.
+
     for genre_col in persona_target_genre_cols:
-        if genre_col in candidate_movies_with_details.columns: 
+        if genre_col in candidate_movies_with_details.columns:
             candidate_movies_with_details[genre_col] = candidate_movies_with_details[genre_col].fillna(0).astype(int)
 
     # 3. Filter by persona target genres
-    if persona_target_genre_cols: 
-        # Ensure we only use genre columns that are actually present in the merged DataFrame
+    if persona_target_genre_cols:
         valid_persona_genre_cols_for_filtering = [col for col in persona_target_genre_cols if col in candidate_movies_with_details.columns]
-        
+
         if not valid_persona_genre_cols_for_filtering:
              st.warning("No valid target persona genre columns found in candidate movies for filtering. Showing unfiltered SVD recommendations (but still excluding watched).")
-             filtered_recommendations_df = candidate_movies_with_details.copy() 
+             filtered_recommendations_df = candidate_movies_with_details.copy()
         else:
-            # Movies must have at least one of the target persona genres
             filter_mask = candidate_movies_with_details[valid_persona_genre_cols_for_filtering].sum(axis=1) > 0
             filtered_recommendations_df = candidate_movies_with_details[filter_mask]
-    else: 
-        # No persona genres specified, so no genre filtering
+    else:
         filtered_recommendations_df = candidate_movies_with_details.copy()
 
     if filtered_recommendations_df.empty:
         print(f"No movies found for User ID {user_id} matching persona genres from the SVD pool (or pool was empty).")
-        return pd.DataFrame() # Consider returning with specific columns
-        
-    # 4. Filter out watched movies (by title)
+        return pd.DataFrame()
+
+    # 4. Filter out watched movies
     if watched_titles and not filtered_recommendations_df.empty:
         if 'title' in filtered_recommendations_df.columns:
             filtered_recommendations_df = filtered_recommendations_df[
                 ~filtered_recommendations_df['title'].isin(watched_titles)
             ]
-        # else: 'title' column should exist due to cols_to_bring_from_movies_data
 
-    # 5. Get the top N results, already sorted by 'predicted_score' from _get_raw_svd_predictions
+    # 5. Get the top N results
     final_df_to_show = filtered_recommendations_df.head(top_n_final)
-    
+
     # 6. Define and ensure final output columns
-    output_cols = ['movieId', 'title', 'genres', 'predicted_score'] # 'predicted_score' is useful for context
-    if 'tmdbId' in movies_data.columns and 'tmdbId' not in output_cols : 
+    output_cols = ['movieId', 'title', 'genres', 'predicted_score']
+    if 'tmdbId' in movies_data.columns and 'tmdbId' not in output_cols :
         output_cols.append('tmdbId')
 
-    # Ensure all desired output columns are present, adding them with NA if missing
     for col in output_cols:
         if col not in final_df_to_show.columns:
             final_df_to_show[col] = pd.NA
@@ -295,43 +270,35 @@ def recommend_similar_movies_partial(
     movies_with_content_for_tfidf['title_for_matching'] = movies_with_content_for_tfidf['title_for_matching'].fillna('').astype(str)
     matches = movies_with_content_for_tfidf[movies_with_content_for_tfidf['title_for_matching'].str.contains(cleaned_movie_title, na=False)]
 
-    matched_movie_original_title = None # Initialize
+    matched_movie_original_title = None
 
     if matches.empty:
         best_fuzz_score = 0
         best_fuzz_idx = -1
-        # Ensure 'title_for_matching' is used for fuzzy matching if it exists and is prepared
-        # The fuzzy matching should iterate over the same source that tfidf_matrix is based on.
         for idx_val, row_title_for_matching in movies_with_content_for_tfidf['title_for_matching'].items():
-            score = fuzz.ratio(cleaned_movie_title, row_title_for_matching) # Compare with cleaned title_for_matching
+            score = fuzz.ratio(cleaned_movie_title, row_title_for_matching)
             if score > best_fuzz_score:
                 best_fuzz_score = score
-                best_fuzz_idx = idx_val # Store the index from movies_with_content_for_tfidf
+                best_fuzz_idx = idx_val
 
         if best_fuzz_score > 80 and best_fuzz_idx != -1:
             matches = movies_with_content_for_tfidf.loc[[best_fuzz_idx]]
-            # matched_movie_original_title would be set after idx is determined from 'matches'
         else:
-            return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None # No good match found
+            return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
 
-    # This check should be after 'matches' is confirmed to be non-empty
-    if matches.empty: # Should not be hit if logic above is correct, but as a safeguard
+    if matches.empty:
         return pd.DataFrame(columns=cols_to_return + ['similarity_score']), None
 
-    idx = matches.index[0] # Index from movies_with_content_for_tfidf
-    
-    # Determine matched_movie_original_title using the 'movieId' from the TF-IDF source DF
-    # and looking it up in the 'movies_for_output_columns' DF.
+    idx = matches.index[0]
+
     matched_movie_id_from_tfidf_source = movies_with_content_for_tfidf.loc[idx, 'movieId']
 
     if 'movieId' not in movies_for_output_columns.columns or 'title' not in movies_for_output_columns.columns:
         st.error("Critical: 'movieId' or 'title' not in the DataFrame for output columns.")
-        # Fallback to title from the tfidf source if output df is problematic
         matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title'] if 'title' in movies_with_content_for_tfidf else "Title Unavailable"
     else:
         matched_movie_row_for_display = movies_for_output_columns[movies_for_output_columns['movieId'] == matched_movie_id_from_tfidf_source]
         if matched_movie_row_for_display.empty:
-            # Fallback if movieId not found in output_df, though this indicates a data consistency issue
             matched_movie_original_title = movies_with_content_for_tfidf.loc[idx, 'title'] if 'title' in movies_with_content_for_tfidf else "Title Unavailable"
         else:
             matched_movie_original_title = matched_movie_row_for_display['title'].iloc[0]
@@ -416,12 +383,11 @@ def recommend_based_on_watch_history_content(
         st.info("Could not generate seed recommendations from watch history.")
         return pd.DataFrame()
 
-    # pd.concat([]) ValueError: No objects to concatenate
-    if not all_recommendations_list: # Double check before concat
+    if not all_recommendations_list:
         return pd.DataFrame()
     try:
         combined_recs_df = pd.concat(all_recommendations_list)
-    except ValueError: # If list is still empty for some reason
+    except ValueError:
         st.info("No recommendations to combine from watch history.")
         return pd.DataFrame()
 
@@ -445,7 +411,7 @@ def recommend_based_on_watch_history_content(
 
 def show_table(df):
     if not df.empty:
-        df_display = df.copy() # Use a different variable name to avoid modifying input df
+        df_display = df.copy()
         df_display.index = range(1, len(df_display) + 1)
         st.dataframe(df_display)
     else:
@@ -555,7 +521,7 @@ def main():
                                 for index, row in recs_df.iterrows():
                                     title_display = row.get('title', "Title not available")
                                     genres_display = row.get('genres', "Genres not available")
-                                    st.subheader(f"{index + 1}. {title_display}") # Use df index + 1 for numbering
+                                    st.subheader(f"{index + 1}. {title_display}")
                                     st.write(f"**Genres:** {genres_display}")
 
                                     tmdb_id_to_fetch = None
@@ -589,25 +555,17 @@ def main():
                     else:
                         st.warning("No recommendations found. Try a different title.")
 
-    # =================== COLLABORATIVE FILTERING (YENİDEN DÜZENLENMİŞ) ===================
+    # =================== COLLABORATIVE FILTERING ===================
     elif choice == MENU_ITEMS[1]:
         st.success("**Collaborative Filtering Recommendation**")
-        st.markdown("""
-        ### Personalized SVD Recommendations
+        st.markdown(""" ### Personalized SVD Recommendations
 
         This section provides SVD-based movie suggestions.
 
-        -   **Demo Profiles:** Recommendations for these profiles are SVD-generated and then post-filtered by the profile's target genre(s). The userId for each demo profile was selected based on specific criteria to ensure strong genre preference: at least 30 total ratings, ≥20% of ratings in the target genre, ≥50% of those in-genre ratings being 4.0+, and at least 5 high scores (4.0+) in the genre.
+        -   **Demo Profiles:** Recommendations for these profiles are SVD-generated and then post-filtered by the profile's target genre(s).
         -   **Manual User ID:** Get general, unfiltered SVD recommendations by entering a MovieLens User ID.
         """)
 
-        # 1. Demo Profilleri Tanımlayın 
-        # LÜTFEN BU userId'LERİ KENDİ VERİ SETİNİZDEN BULDUĞUNUZ
-        # GERÇEK VE ANLAMLI ID'LERLE DEĞİŞTİRİN!
-        # 'target_genre_cols' içindeki sütun adları, movies DataFrame'inizdeki
-        # one-hot encoded tür sütun adlarıyla BİREBİR AYNI OLMALIDIR.
-        # Örneğin, preprocess_dataset.py'de clean_text_for_matching("Comedy") -> "comedy" ise,
-        # sütun adı 'genre_comedy' olmalıdır.
         DEMO_PROFILES_WITH_GENRES = {
             "Select a Demo Profile...": {"id": None, "target_genre_cols": []},
             "🎬 Comedy Fan": {"id": 88539, "target_genre_cols": ['genre_comedy']},
@@ -617,15 +575,13 @@ def main():
             "🧸 Animation & Family Watcher": {"id": 93359, "target_genre_cols": ['genre_animation', 'genre_children']}
         }
 
-        # 2. Kullanıcının Demo Profil Seçmesi İçin Selectbox
         chosen_profile_name = st.selectbox(
             "Explore recommendations for a demo profile:",
             options=list(DEMO_PROFILES_WITH_GENRES.keys()),
-            key="cf_demo_profile_selectbox_v4", # Yeni ve benzersiz bir key
+            key="cf_demo_profile_selectbox_v4",
             index=0
         )
 
-        # 3. Öneri İçin Kullanılacak Nihai User ID ve Filtre Türleri
         user_id_to_process = None
         target_cols_for_filter = []
 
@@ -634,44 +590,41 @@ def main():
             user_id_to_process = persona_definition["id"]
             target_cols_for_filter = persona_definition["target_genre_cols"]
 
-        # 4. Manuel User ID Giriş Alanı
-        if user_id_to_process is None: # Demo profil seçilmemişse manuel girişe izin ver
+        if user_id_to_process is None:
             manual_user_id_input_str = st.text_input(
                 "Or, enter a specific MovieLens User ID (e.g., 1):",
-                key="cf_manual_userid_input_v4", # Yeni key
+                key="cf_manual_userid_input_v4",
                 help="Enter a numeric User ID from the MovieLens dataset for general SVD recommendations."
             ).strip()
 
             if manual_user_id_input_str:
                 if manual_user_id_input_str.isdigit():
                     user_id_to_process = int(manual_user_id_input_str)
-                    # Manuel ID için hedef tür filtresi yok (target_cols_for_filter boş kalacak)
                 else:
                     if chosen_profile_name == "Select a Demo Profile...":
                         st.warning("Please enter a valid numeric User ID or select a demo profile.")
 
-        # 5. Öneri Alma Butonu
-        if st.button("Get Collaborative Recommendations", key="cf_get_recs_button_v4"): # Yeni key
+        if st.button("Get Collaborative Recommendations", key="cf_get_recs_button_v4"):
             if user_id_to_process is not None:
                 if surprise_model is not None:
                     if ratings is not None and not ratings.empty:
 
-                        recs_df = pd.DataFrame() # Başlangıçta boş DataFrame
+                        recs_df = pd.DataFrame()
 
-                        if target_cols_for_filter: # Demo profil seçilmiş VE hedef türleri tanımlanmışsa
+                        if target_cols_for_filter:
                             st.markdown(f"### Showing SVD Recommendations for '{chosen_profile_name}' profile (Filtered by Target Genre(s))")
                             recs_df = get_filtered_svd_recommendations_for_persona(
                                 user_id=user_id_to_process,
                                 persona_target_genre_cols=target_cols_for_filter,
                                 model=surprise_model,
-                                movies_data=movies, # Ana movies DataFrame'i (one-hot genre'lı)
-                                ratings_data=ratings, # Tam ratings DataFrame'i
+                                movies_data=movies,
+                                ratings_data=ratings,
                                 watched_titles=st.session_state.get('watched_movies', set()),
                                 top_n_final=10
                             )
-                        elif chosen_profile_name == "Select a Demo Profile..." and user_id_to_process is not None: # Manuel ID girilmişse (filtresiz)
+                        elif chosen_profile_name == "Select a Demo Profile..." and user_id_to_process is not None:
                              st.markdown(f"### Showing General SVD Recommendations for User ID: {user_id_to_process}")
-                             recs_df = get_user_recommendations( # Sizin mevcut filtresiz fonksiyonunuz
+                             recs_df = get_user_recommendations(
                                          user_id=user_id_to_process,
                                          surprise_model=surprise_model,
                                          movies_df=movies,
@@ -679,24 +632,19 @@ def main():
                                          watched_titles=st.session_state.get('watched_movies', set()),
                                          top_n=10
                                      )
-                        else: # Beklenmedik bir durum veya demo profil seçilmiş ama hedef türü yok (yapılandırma hatası)
-                            if chosen_profile_name != "Select a Demo Profile...": # Sadece demo profil seçiliyken bu hatayı ver
+                        else:
+                            if chosen_profile_name != "Select a Demo Profile...":
                                 st.error(f"Target genres are not properly defined for the selected profile: {chosen_profile_name}. "
                                          "Please check the 'target_genre_cols' in DEMO_PROFILES_WITH_GENRES.")
-                        
-                        # --- ÖNERİ GÖSTERME KISMI ---
+
                         if not recs_df.empty:
                             with st.expander("See Recommendations", expanded=True):
                                 for i, row in recs_df.reset_index(drop=True).iterrows():
                                     title_display = row.get('title', "Title not available")
                                     genres_display = row.get('genres', "Genres not available")
-                                    # predicted_score_display = row.get('predicted_score', None) # Eğer skor göstermek isterseniz
 
                                     st.subheader(f"{i + 1}. {title_display}")
                                     st.write(f"**Genres:** {genres_display}")
-                                    # if predicted_score_display is not None:
-                                    #     st.write(f"Predicted Score: {predicted_score_display:.2f}")
-
 
                                     tmdb_id_to_fetch = None
                                     if 'tmdbId' in row and pd.notna(row['tmdbId']):
@@ -723,18 +671,17 @@ def main():
                                     else:
                                         st.caption("TMDB ID not found, so poster and overview cannot be displayed.")
                                     st.markdown("---")
-                        else: # recs_df boş ise
-                            if user_id_to_process: # Eğer bir kullanıcı ID'si işlenmeye çalışıldıysa
+                        else:
+                            if user_id_to_process:
                                 if chosen_profile_name != "Select a Demo Profile..." and target_cols_for_filter :
                                     st.info(f"No SVD recommendations found matching the genres for the '{chosen_profile_name}' profile after filtering. "
                                             "This might mean the SVD model didn't rank target genre movies high enough for this user profile, "
                                             "or all such movies were already in the global watch history. "
                                             "You could try a different profile or the Content-Based recommender.")
-                                else: # Manuel ID veya demo profil için filtrelenmemiş ama yine de boş
+                                else:
                                     st.warning(f"No new recommendations found for User ID {user_id_to_process}. This could be due to various reasons "
                                                "(e.g., user has rated many movies, all potential recommendations are in the global watch history, "
                                                "or the User ID is not in the model's training data if entered manually).")
-                            # else: # user_id_to_process None ise zaten aşağıdaki "Please select..." uyarısı çıkacak
                     else:
                         st.error("Ratings data is not available or empty. Cannot generate collaborative recommendations.")
                 else:
@@ -745,8 +692,8 @@ def main():
     # =================== MOOD-BASED ===================
     elif choice == MENU_ITEMS[2]:
         st.success("**Mood-Based Recommendation**")
-        mood_selected = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys()), key="mood_selectbox_input_v2") # Yeni key
-        if st.button("Get Mood-Based Recommendations", key="mood_get_recs_button_v2"): # Yeni key
+        mood_selected = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys()), key="mood_selectbox_input_v2")
+        if st.button("Get Mood-Based Recommendations", key="mood_get_recs_button_v2"):
             recs_df = recommend_by_mood(
                 mood_selected,
                 movies,
@@ -755,7 +702,7 @@ def main():
             )
             if not recs_df.empty:
                 with st.expander("See Recommendations", expanded=True):
-                    for i, row in recs_df.reset_index(drop=True).iterrows(): # Numaralandırma için reset_index
+                    for i, row in recs_df.reset_index(drop=True).iterrows():
                         title_display = row.get('title', "Title not available")
                         genres_display = row.get('genres', "Genres not available")
                         st.subheader(f"{i + 1}. {title_display}")
@@ -796,12 +743,11 @@ def main():
     elif choice == MENU_ITEMS[3]:
         st.success("**Random Movie Recommendation**")
 
-        # Get available genres for the filter
         available_genres = []
         if not movies.empty and 'genres' in movies.columns:
             all_genres_list = movies['genres'].str.split('|').explode().str.strip().unique()
             available_genres = sorted([genre for genre in all_genres_list if genre and genre != '(no genres listed)'])
-        
+
         selected_genres_for_random = []
         if available_genres:
             selected_genres_for_random = st.multiselect(
@@ -812,26 +758,19 @@ def main():
         else:
             st.caption("No genres available for filtering or movies data is not loaded correctly.")
 
-        if st.button("Pick a Random Movie", key="random_movie_button_v3"): 
+        if st.button("Pick a Random Movie", key="random_movie_button_v3"):
             filtered_movies_for_random = movies.copy()
-            
+
             if selected_genres_for_random:
-                # Filter movies that contain AT LEAST ONE of the selected genres
-                # This requires genres to be in string format and then checking for substring presence for each selected genre
-                # A movie is kept if any of its genres match any of the selected genres.
-                # We assume genres in the DataFrame are like "Action|Adventure|Sci-Fi"
-                
-                # Create a boolean mask, True for rows that match at least one selected genre
                 genre_mask = pd.Series([False] * len(filtered_movies_for_random), index=filtered_movies_for_random.index)
                 for genre_filter in selected_genres_for_random:
-                    # Ensure case-insensitivity if needed, though genre list is usually consistent
                     genre_mask |= filtered_movies_for_random['genres'].str.contains(genre_filter, case=False, na=False)
-                
+
                 filtered_movies_for_random = filtered_movies_for_random[genre_mask]
 
             if not filtered_movies_for_random.empty:
-                movie_picked = pick_random_movie(filtered_movies_for_random) # pick_random_movie now handles empty df
-                
+                movie_picked = pick_random_movie(filtered_movies_for_random)
+
                 if movie_picked is not None:
                     st.info(f"**Title:** {movie_picked.get('title', 'N/A')}")
                     st.info(f"**Genres:** {movie_picked.get('genres', 'N/A')}")
@@ -850,13 +789,13 @@ def main():
                             st.image(movie_details["poster_url"], width=200)
                         if movie_details and movie_details.get("overview"):
                             st.caption(f"Overview: {movie_details['overview']}")
-                        elif movie_details: # Details fetched but no poster/overview
+                        elif movie_details:
                             st.caption("Poster or overview not available on TMDB.")
-                        else: # No details fetched
+                        else:
                             st.caption("Details could not be retrieved from TMDB.")
                     else:
                         st.caption("TMDB ID not found for this movie, so poster and overview cannot be displayed.")
-                else: # movie_picked was None
+                else:
                     st.warning("Could not pick a random movie from the filtered selection (it might be empty after filtering).")
             else:
                 if selected_genres_for_random:
@@ -868,7 +807,6 @@ def main():
     elif choice == MENU_ITEMS[4]:
         st.success("**Watch History & Personalized Recommendations**")
 
-        # Initialize session state for watched_movies if it doesn't exist
         if 'watched_movies' not in st.session_state:
             st.session_state.watched_movies = set()
 
@@ -876,60 +814,53 @@ def main():
             all_movie_titles = movies['title'].dropna().sort_values().unique().tolist()
             selectable_movies = [
                 title for title in all_movie_titles
-                if title not in st.session_state.watched_movies # Use .watched_movies directly
+                if title not in st.session_state.watched_movies
             ]
         else:
             selectable_movies = []
-            all_movie_titles = [] # Ensure it's defined
+            all_movie_titles = []
 
         if selectable_movies:
-            # Key for multiselect should be consistent if its value is read from st.session_state directly
-            # Using a more descriptive key for the widget itself if needed, e.g., "add_to_watch_history_multiselect"
-            # The state is accessed via st.session_state[key_name]
             st.multiselect(
                 "Select movies to add to your watch history:",
                 options=selectable_movies,
-                key="multiselect_add_watched_movies_key" 
+                key="multiselect_add_watched_movies_key"
             )
-            if st.button("Add Selected to Watch History", key="add_selected_to_watch_history_button_v3"): # New key
+            if st.button("Add Selected to Watch History", key="add_selected_to_watch_history_button_v3"):
                 selected_movies_to_add = st.session_state.multiselect_add_watched_movies_key
                 if selected_movies_to_add:
                     for movie_title_add in selected_movies_to_add:
                         st.session_state.watched_movies.add(movie_title_add)
                     st.success(f"{len(selected_movies_to_add)} movie(s) added to your watch history.")
-                    # st.session_state.movies_added_to_watch_history_flag = True # This flag might not be necessary if rerun is used
                     st.rerun()
                 else:
                     st.warning("Please select at least one movie to add.")
-        elif not movies.empty and 'title' in movies.columns and not all_movie_titles: # Corrected condition
+        elif not movies.empty and 'title' in movies.columns and not all_movie_titles:
              st.warning("Movie list is empty or contains no valid titles to select from.")
         elif movies.empty or 'title' not in movies.columns:
             st.warning("Movie list is not available to make selections.")
-        else: # This means selectable_movies is empty but all_movie_titles is not, so all movies are watched
+        else:
             st.info("All movies from the list are already in your watch history or the movie list is empty.")
 
 
-        if st.session_state.watched_movies: # Check if the set itself is not empty
+        if st.session_state.watched_movies:
             st.write("Your current watch history:")
-            # Sort the list for consistent display and use in multiselect for removal
             watched_list_for_df = sorted(list(st.session_state.watched_movies))
-            
-            # Display DataFrame
+
             watched_df = pd.DataFrame(watched_list_for_df, columns=['Title'])
-            watched_df.index = range(1, len(watched_df) + 1) # 1-based indexing
+            watched_df.index = range(1, len(watched_df) + 1)
             st.dataframe(watched_df, height=min(300, len(watched_df) * 40 + 40), use_container_width=True)
 
-            # --- Add section to remove movies from watch history ---
-            st.markdown("---") 
+            st.markdown("---")
             st.subheader("Manage Your Watch History")
-            
-            if watched_list_for_df: # Check if there's anything to remove
+
+            if watched_list_for_df:
                 movies_to_remove_selection = st.multiselect(
                     "Select movies to remove from your watch history:",
-                    options=watched_list_for_df, 
-                    key="multiselect_remove_watched_movies_key" # Unique key for this multiselect
+                    options=watched_list_for_df,
+                    key="multiselect_remove_watched_movies_key"
                 )
-                if st.button("Remove Selected from Watch History", key="remove_selected_from_watch_history_button_v3"): # New unique key
+                if st.button("Remove Selected from Watch History", key="remove_selected_from_watch_history_button_v3"):
                     if movies_to_remove_selection:
                         removed_count = 0
                         for movie_title_remove in movies_to_remove_selection:
@@ -938,16 +869,15 @@ def main():
                                 removed_count += 1
                         if removed_count > 0:
                             st.success(f"{removed_count} movie(s) removed from your watch history.")
-                            st.rerun() 
+                            st.rerun()
                         else:
                             st.info("Selected movies were not found in the current watch history (perhaps selection was cleared or they were already removed).")
                     else:
                         st.warning("Please select at least one movie to remove.")
-            # --- End of remove section ---
         else:
             st.info("Your watch history is currently empty. Add movies using the selection field above.")
 
-        if st.button("Get Recommendations Based on Watch History", key="get_recs_watch_history_button_v3"): # New key
+        if st.button("Get Recommendations Based on Watch History", key="get_recs_watch_history_button_v3"):
             watched_titles_set = st.session_state.watched_movies
             if not watched_titles_set:
                 st.warning("Your watch history is empty. Please add some movies to get personalized suggestions.")
@@ -966,7 +896,7 @@ def main():
                     if not recs_based_on_watched.empty:
                         st.subheader("Recommendations based on your watch history:")
                         with st.expander("See Recommendations", expanded=True):
-                            for i, row in recs_based_on_watched.reset_index(drop=True).iterrows(): # Numaralandırma
+                            for i, row in recs_based_on_watched.reset_index(drop=True).iterrows():
                                 title_display = row.get('title', "Title not available")
                                 genres_display = row.get('genres', "Genres not available")
                                 st.subheader(f"{i + 1}. {title_display}")
@@ -1001,30 +931,62 @@ def main():
                                     st.caption("TMDB ID not found, poster cannot be displayed.")
                                 st.markdown("---")
                     else:
-                        st.info("Could not find new recommendations based on your current watch history. Try adding more diverse movies!")
+                        st.warning("No new recommendations found based on your current watch history. Try adding more diverse movies.")
 
-    # =================== UNWATCHED MOVIES ===================
+    # =================== ABOUT / HELP ===================
     elif choice == MENU_ITEMS[5]:
-        st.subheader("🕵️ Unwatched Movies")
-        if 'watched_movies' not in st.session_state or not st.session_state['watched_movies']:
-            st.info("Your watch history is empty. Watch some movies first!")
-        else:
-            if 'title' in movies.columns:
-                unwatched_movies = movies[~movies['title'].isin(st.session_state['watched_movies'])]
-                if not unwatched_movies.empty:
-                    st.markdown("### Here are some movies you haven't watched yet:")
-                    # Sonucu daha yönetilebilir kılmak için ilk 20'sini göster
-                    display_unwatched = unwatched_movies[['title', 'genres']].head(20)
-                    display_unwatched.index = range(1, len(display_unwatched) + 1) # Numaralandırma
-                    if 'show_table' in globals() and callable(globals()['show_table']):
-                        show_table(display_unwatched)
-                    else:
-                        st.dataframe(display_unwatched)
-                else:
-                    st.info("You've watched all the movies in our database!")
-            else:
-                st.warning("Movie titles are not available to determine unwatched movies.")
+        st.success("**About & Help**")
+        st.markdown(""" ### Welcome to the Movie Recommendation System!
 
+        This application demonstrates various movie recommendation techniques:
 
-if __name__ == "__main__":
+        *   **Content-Based Filtering:** Recommends movies similar to one you like, based on movie titles, genres, and tags.
+        *   **Collaborative Filtering (SVD):**
+            *   **Demo Profiles:** Shows recommendations for pre-defined user profiles with specific genre preferences. These are SVD-based, then filtered by the profile's target genre(s).
+            *   **Manual User ID:** Provides general SVD recommendations for any MovieLens User ID.
+        *   **Mood-Based:** Suggests movies based on your selected mood, mapped to relevant genres.
+        *   **Random Movie Picker:** Lets you discover a random movie, optionally filtered by genre.
+        *   **Watch History & Personalized Recs:**
+            *   Build and manage your own watch history.
+            *   Get content-based recommendations derived from your entire watch history.
+
+        **Data Sources:**
+        *   MovieLens 25M Dataset (movies, ratings, tags).
+        *   TMDB API for movie posters and overviews.
+
+        **Key Technologies:**
+        *   Streamlit for the web application interface.
+        *   Pandas for data manipulation.
+        *   Scikit-learn for TF-IDF vectorization and cosine similarity.
+        *   Surprise library for the SVD collaborative filtering model.
+        *   TheFuzz for fuzzy string matching of movie titles.
+
+        **How to Use:**
+        1.  Select a recommendation method from the sidebar menu.
+        2.  Follow the on-screen prompts (e.g., enter a movie title, select a mood, or choose a demo profile).
+        3.  View the generated recommendations.
+        4.  Use the "Watch History" section to curate a list of movies you've seen and get recommendations based on it.
+
+        **Notes on Demo Profiles (Collaborative Filtering):**
+        The User IDs for demo profiles were chosen by analyzing the MovieLens dataset to find users with strong preferences for specific genres. This involved looking for users who:
+        *   Rated a sufficient number of movies overall (e.g., >30 ratings).
+        *   Had a significant portion of their ratings within the target genre(s) (e.g., >20% of total ratings).
+        *   Gave high ratings (e.g., >= 4.0) to a good number of movies within those target genres.
+        *   Specifically, at least 5 high scores (4.0+) in the target genre.
+        This helps ensure that the SVD model, when applied to these user IDs, is likely to recommend movies relevant to the demo profile's theme, which are then further refined by the genre filter.
+
+        **Troubleshooting:**
+        *   If a model (e.g., Surprise SVD) is not loaded, related features will be disabled. Ensure `model.pkl` is present.
+        *   If `links.csv` (for TMDB IDs) is missing, poster functionality will be affected.
+        *   Content-based recommendations require `movies_clean.csv` and `tags_clean.csv`.
+        *   Ensure your `TMDB_API_KEY` is correctly set in `config.py` for poster and overview fetching.
+
+        Enjoy exploring movie recommendations!
+        """)
+
+    # =================== FOOTER ===================
+    st.sidebar.markdown("---")
+    st.sidebar.info("Movie Recommendation System v1.2")
+
+if __name__ == '__main__':
     main()
