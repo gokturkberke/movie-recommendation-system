@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from data_access import load_surprise_model
+from data_access import load_movies, load_surprise_model
 from recommenders import (
     build_tfidf_matrix,
     pick_random_movie,
@@ -160,6 +160,36 @@ class TestMovieRecommendations(unittest.TestCase):
 
         self.assertIsNone(model)
         self.assertIn("not found", error)
+
+    def test_load_movies_restores_year_in_display_title_from_existing_clean_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            movies_path = Path(tmp_dir) / "movies_clean.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "movieId": 1,
+                        "title": "Sabrina",
+                        "genres": "Comedy|Romance",
+                        "title_original": "Sabrina (1954)",
+                        "title_for_matching": "sabrina",
+                        "genres_for_matching": "comedy romance",
+                    },
+                    {
+                        "movieId": 2,
+                        "title": "Sabrina",
+                        "genres": "Comedy|Romance",
+                        "title_original": "Sabrina (1995)",
+                        "title_for_matching": "sabrina",
+                        "genres_for_matching": "comedy romance",
+                    },
+                ]
+            ).to_csv(movies_path, index=False)
+
+            movies = load_movies(tmp_dir)
+
+        self.assertEqual(movies["title"].tolist(), ["Sabrina (1954)", "Sabrina (1995)"])
+        self.assertEqual(movies["title_display"].tolist(), ["Sabrina (1954)", "Sabrina (1995)"])
+        self.assertEqual(movies["title_for_matching"].tolist(), ["sabrina", "sabrina"])
 
     def test_tmdb_id_falls_back_to_links(self):
         row = pd.Series({"movieId": 3, "title": "Heat"})

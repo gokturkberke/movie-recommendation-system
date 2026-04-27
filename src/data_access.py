@@ -9,6 +9,8 @@ EXPECTED_MOVIE_COLUMNS = [
     "movieId",
     "title",
     "genres",
+    "title_display",
+    "title_clean",
     "title_for_matching",
     "genres_for_matching",
 ]
@@ -35,6 +37,11 @@ def load_movies(data_dir=CLEANED_DATA_DIR):
     for column in EXPECTED_MOVIE_COLUMNS:
         if column not in movies.columns:
             movies[column] = ""
+    if "title_original" in movies.columns:
+        title_display = movies["title_original"].fillna("").astype(str).str.strip()
+        movies["title_display"] = title_display
+        movies["title_clean"] = title_display
+        movies["title"] = title_display
     return movies
 
 

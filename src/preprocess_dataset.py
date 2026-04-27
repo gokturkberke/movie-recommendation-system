@@ -50,14 +50,11 @@ movies = movies[~movies['genres'].str.contains(r"\(no genres listed\)", na=False
 movies['title'] = movies['title'].fillna('').astype(str).str.strip()
 movies['genres'] = movies['genres'].fillna('').astype(str).str.strip()
 
-# Clean title (remove non-alphanumeric characters except spaces and year)
-def clean_title_original_format(title):
+# Clean title for display while preserving the release year.
+def clean_title_display(title):
     if pd.isnull(title):
         return ""
     title = str(title)
-    # Remove year from title, e.g., " (1995)"
-    title = re.sub(r'\s*\(\d{4}\)', '', title)
-    # Remove special characters except parentheses for original format
     title = re.sub(r'[^a-zA-Z0-9\s()]', '', title) # Keep parentheses
     title = re.sub(r'\s+', ' ', title).strip() # Remove extra spaces
     return title
@@ -78,8 +75,10 @@ def clean_text_for_matching(text):
 movies['title_original'] = movies['title']
 movies['genres_original'] = movies['genres']
 
-# Apply specific cleaning for display/original format title
-movies['title'] = movies['title_original'].apply(clean_title_original_format)
+# Keep release years in display titles to disambiguate remakes and same-name movies.
+movies['title_display'] = movies['title_original'].apply(clean_title_display)
+movies['title_clean'] = movies['title_display']
+movies['title'] = movies['title_display']
 
 # Create cleaned versions for matching/TF-IDF
 movies['title_for_matching'] = movies['title_original'].apply(clean_text_for_matching)

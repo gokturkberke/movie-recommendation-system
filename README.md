@@ -93,7 +93,7 @@ Once the application is running:
     * **Mood-Based Recommendation:** Get movie suggestions based on your current mood.
     * **Random Movie:** Discover a random movie.
     * **Watch History & Recommendations:** Add movies to your watch history and get recommendations based on it.
-    * **Unwatched Movies:** List movies not in your watch history.
+    * **About & Help:** Explains recommendation methods and local setup requirements.
 2.  Input the required information (movie title, user ID, etc.) in the respective fields and click the "Get Recommendations" (or similar) button.
 3.  The results will be displayed, including movie titles, genres, posters, and summaries.
 
@@ -101,4 +101,4 @@ Once the application is running:
 
 Unit tests are available for some core functions of the project. To run them:
 ```bash
-python -m unittest src/test_movie_rec.py
+.venv/bin/python -m unittest src/test_movie_rec.py
