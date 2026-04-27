@@ -1,7 +1,25 @@
-# src/config.py
+import os
+from pathlib import Path
 
-# TMDB API Key
-TMDB_API_KEY = "d4dd76aa404d680766dbacc0e83552bd"
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
+CLEANED_DATA_DIR = PROJECT_ROOT / "cleaned_data"
+SVD_MODEL_PATH = CLEANED_DATA_DIR / "svd_trained_model.pkl"
+
+
+def get_tmdb_api_key():
+    """Read the TMDB API key without hardcoding secrets in source control."""
+    env_key = os.getenv("TMDB_API_KEY")
+    if env_key:
+        return env_key
+
+    try:
+        import streamlit as st
+
+        return st.secrets.get("TMDB_API_KEY")
+    except Exception:
+        return None
 
 MOOD_GENRE_MAP = {
     "happy": ["Comedy", "Family", "Animation", "Romance"],
@@ -24,7 +42,7 @@ MENU_ITEMS = [
     "😊 Mood-Based Recommendation",
     "🎲 Random Movie",
     "📽️ Watch History & Recommendations",
-    "🕵️ Unwatched Movies"
+    "ℹ️ About & Help",
 ]
 
 DEMO_PROFILES_WITH_GENRES = {

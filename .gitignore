@@ -129,6 +129,8 @@ celerybeat.pid
 
 # Environments
 .env
+.DS_Store
+.streamlit/secrets.toml
 .venv
 env/
 venv/

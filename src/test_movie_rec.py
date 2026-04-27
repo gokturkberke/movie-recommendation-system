@@ -1,180 +1,180 @@
+import tempfile
 import unittest
-import os
+import sys
+from pathlib import Path
+
 import pandas as pd
-from surprise import SVD # Import SVD directly
-from app import (
-    recommend_by_watched_genres,
-    # load_ratings_for_surprise, # Removed this import
-    # train_surprise_model, # Removed this import
-    get_user_recommendations,
-    load_movies,
-    load_ratings 
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from data_access import load_surprise_model
+from recommenders import (
+    build_tfidf_matrix,
+    pick_random_movie,
+    recommend_based_on_watch_history_content,
+    recommend_by_mood,
+    recommend_for_user,
+    recommend_similar_movies,
 )
-from surprise import Dataset, Reader
-from surprise.model_selection import train_test_split
-from surprise import accuracy
+from tmdb_client import get_tmdb_id
+
+
+class FakePrediction:
+    def __init__(self, est):
+        self.est = est
+
+
+class FakeSvdModel:
+    def predict(self, uid, iid):
+        scores = {
+            2: 4.9,
+            3: 3.8,
+            4: 4.5,
+        }
+        return FakePrediction(scores.get(iid, 2.5))
+
+
+def fixture_movies():
+    return pd.DataFrame(
+        [
+            {
+                "movieId": 1,
+                "title": "Toy Story",
+                "genres": "Adventure|Animation|Children|Comedy|Fantasy",
+                "title_for_matching": "toy story",
+                "genres_for_matching": "adventure animation children comedy fantasy",
+                "genre_comedy": 1,
+                "genre_action": 0,
+                "tmdbId": 862,
+            },
+            {
+                "movieId": 2,
+                "title": "Toy Story 2",
+                "genres": "Adventure|Animation|Children|Comedy|Fantasy",
+                "title_for_matching": "toy story 2",
+                "genres_for_matching": "adventure animation children comedy fantasy",
+                "genre_comedy": 1,
+                "genre_action": 0,
+                "tmdbId": 863,
+            },
+            {
+                "movieId": 3,
+                "title": "Heat",
+                "genres": "Action|Crime|Thriller",
+                "title_for_matching": "heat",
+                "genres_for_matching": "action crime thriller",
+                "genre_comedy": 0,
+                "genre_action": 1,
+                "tmdbId": pd.NA,
+            },
+            {
+                "movieId": 4,
+                "title": "Casino",
+                "genres": "Crime|Drama",
+                "title_for_matching": "casino",
+                "genres_for_matching": "crime drama",
+                "genre_comedy": 0,
+                "genre_action": 0,
+                "tmdbId": pd.NA,
+            },
+        ]
+    )
+
+
+def fixture_tags():
+    return pd.DataFrame(
+        [
+            {"userId": 1, "movieId": 1, "tag": "toys friendship pixar", "timestamp": 1},
+            {"userId": 1, "movieId": 2, "tag": "toys sequel pixar", "timestamp": 1},
+            {"userId": 2, "movieId": 3, "tag": "crime heist intense", "timestamp": 1},
+            {"userId": 2, "movieId": 4, "tag": "crime mafia drama", "timestamp": 1},
+        ]
+    )
+
 
 class TestMovieRecommendations(unittest.TestCase):
-
     def setUp(self):
-        # Movies dosyasını yükler ve temizler
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Adjust path to be relative to the test file's location
-        self.base_dir = os.path.join(script_dir, '..') 
-        self.cleaned_data_path = os.path.join(self.base_dir, 'cleaned_data')
-        
-        self.movies_df = load_movies(data_path=self.cleaned_data_path)
-        self.ratings_df = load_ratings(data_path=self.cleaned_data_path)
-
-        # Prepare data for Surprise
-        reader = Reader(rating_scale=(0.5, 5.0))
-        self.surprise_data = Dataset.load_from_df(self.ratings_df[['userId', 'movieId', 'rating']], reader)
-        
-        # Split data into training and testing sets for Surprise model evaluation
-        self.trainset, self.testset = train_test_split(self.surprise_data, test_size=0.25, random_state=42)
-        
-        # Train the SVD model directly within the test's setUp
-        print("Testler için SVD modeli self.trainset üzerinde eğitiliyor...")
-        algo_for_test = SVD()
-        algo_for_test.fit(self.trainset) # Directly train on the test-specific trainset
-        self.svd_model = algo_for_test # Use this model in tests
-        print("Test modeli eğitildi.")
-
-        # Test data for recommend_by_watched_genres
-        self.test_data_watched_genres = [
-            {
-                "watched_movies": ['Toy Story (1995)', 'Jumanji (1995)'],
-                "expected_recommendations": ['Toy Story 2 (1999)'] # Example, adjust based on your logic
-            },
-            {
-                "watched_movies": ['Heat (1995)'],
-                "expected_recommendations": ['Casino (1995)', 'GoldenEye (1995)'] # Example
-            },
-            {
-                "watched_movies": ['Pulp Fiction (1994)'],
-                "expected_recommendations": ['Reservoir Dogs (1992)', 'Natural Born Killers (1994)'] # Example
-            }
-        ]
-
-    def test_recommendations_by_watched_genres(self):
-        print("\\n=== Test Recommendations by Watched Genres ===")
-        for test_case in self.test_data_watched_genres:
-            watched_movies = test_case['watched_movies']
-            expected_recommendations = test_case['expected_recommendations']
-            
-            recommendations = recommend_by_watched_genres(
-                watched_movies, self.movies_df, top_n=10
-            )
-            
-            print(f"\\nWatched: {watched_movies}")
-            print(f"Expected (sample): {expected_recommendations}")
-            print(f"Recommended: {recommendations['title'].tolist()}\\n")
-            
-            recommended_titles = recommendations['title'].tolist()
-            # This test is more of a sanity check as exact matches can be hard with genre-based logic
-            # You might want to check if recommended genres align with watched genres
-            if expected_recommendations: # Only assert if there are expected titles
-                 for expected in expected_recommendations:
-                    self.assertIn(expected, recommended_titles, f"Expected '{expected}' in recommendations for watched: {watched_movies}")
-
-    def test_empty_watched_list_for_genre_recs(self):
-        print("\\n=== Test Empty Watched List for Genre Recs ===")
-        recommendations = recommend_by_watched_genres([], self.movies_df)
-        self.assertTrue(recommendations.empty, "Should return empty DataFrame for empty watched list")
-
-    def test_no_matching_movies_for_genre_recs(self):
-        print("\\n=== Test No Matching Movies for Genre Recs ===")
-        # Using a very unlikely movie title
-        recommendations = recommend_by_watched_genres(['NonExistentMovieTitle12345XYZ'], self.movies_df)
-        # Depending on fallback logic, this might not be empty. 
-        # If fallback provides random movies, this test needs adjustment.
-        # Assuming current logic might return genre-based from "NonExistent..." if it has genres,
-        # or fallback if no movies are found.
-        # For now, let's assume it should be empty if the title itself is not found and no genres can be inferred.
-        # This might need refinement based on how `_extract_watched_movies_and_genres` handles truly non-existent titles.
-        print(f"Recommendations for non-existent movie: {recommendations}")
-
-
-    # --- Tests for Collaborative Filtering (Surprise) ---
-
-    def test_surprise_model_rmse(self):
-        print("\\n=== Test Surprise Model RMSE ===")
-        predictions = self.svd_model.test(self.testset)
-        rmse = accuracy.rmse(predictions)
-        print(f"RMSE for SVD model: {rmse}")
-        # Set a threshold for RMSE, e.g., less than 1.0. This depends on your data and expectations.
-        self.assertLess(rmse, 1.0, "RMSE should be below 1.0 for the SVD model")
-
-    def test_collaborative_filtering_recommendations_for_user(self):
-        print("\\n=== Test Collaborative Filtering Recommendations ===")
-        # Test for a specific user (e.g., userId 1)
-        user_id_to_test = 1 
-        
-        # Ensure the user exists in the ratings data
-        if user_id_to_test not in self.ratings_df['userId'].unique():
-            print(f"User {user_id_to_test} not in ratings data, skipping CF test for this user.")
-            return
-
-        recommendations = get_user_recommendations(
-            user_id=user_id_to_test,
-            surprise_model=self.svd_model,
-            movies_df=self.movies_df,
-            ratings_df=self.ratings_df, # Pass the full ratings_df here
-            top_n=5
+        self.movies = fixture_movies()
+        self.tags = fixture_tags()
+        self.tfidf_matrix, self.vectorizer, self.movies_with_content = build_tfidf_matrix(
+            self.movies.copy(),
+            self.tags.copy(),
         )
-        
-        print(f"\\nRecommendations for User ID {user_id_to_test}:")
-        if not recommendations.empty:
-            print(recommendations)
-        else:
-            print("No recommendations generated (this might be expected if user has rated all, or few items).")
 
-        self.assertIsInstance(recommendations, pd.DataFrame, "Recommendations should be a DataFrame.")
-        if not recommendations.empty:
-            self.assertTrue('title' in recommendations.columns, "DataFrame should have a 'title' column.")
-            self.assertTrue('genres' in recommendations.columns, "DataFrame should have a 'genres' column.")
-            self.assertLessEqual(len(recommendations), 5, "Should return at most top_n recommendations.")
-
-        # Further checks:
-        # 1. Ensure recommended movies have not been previously rated by this user.
-        user_rated_movies = self.ratings_df[self.ratings_df['userId'] == user_id_to_test]['movieId'].unique()
-        if not recommendations.empty:
-            recommended_movie_ids = self.movies_df[self.movies_df['title'].isin(recommendations['title'])]['movieId']
-            for rec_movie_id in recommended_movie_ids:
-                self.assertNotIn(rec_movie_id, user_rated_movies, 
-                                 f"Movie ID {rec_movie_id} (recommended) was already rated by user {user_id_to_test}")
-                                 
-    def test_collaborative_filtering_for_new_user(self):
-        print("\\n=== Test Collaborative Filtering for New User (Cold Start) ===")
-        # A user ID that is definitely not in the dataset
-        new_user_id = self.ratings_df['userId'].max() + 100 
-        
-        recommendations = get_user_recommendations(
-            user_id=new_user_id,
-            surprise_model=self.svd_model,
-            movies_df=self.movies_df,
-            ratings_df=self.ratings_df,
-            top_n=5
+    def test_content_based_fuzzy_match_and_watched_exclusion(self):
+        recommendations, matched_title = recommend_similar_movies(
+            "toy storie",
+            self.movies_with_content,
+            self.tfidf_matrix,
+            self.movies,
+            watched_titles={"Toy Story"},
+            top_n=3,
         )
-        
-        print(f"\\nRecommendations for New User ID {new_user_id}:")
-        if not recommendations.empty:
-            print(recommendations)
-        else:
-            print("No recommendations generated (expected for a new user with no ratings).")
-        
-        # For a new user with no ratings, the current get_user_recommendations might return empty
-        # or fall back to some default (e.g. popular movies, though not implemented here).
-        # The current implementation of get_user_recommendations iterates through all_movie_ids
-        # and predicts. For a truly new user not in the trainset, SVD might give default predictions.
-        # Let's assert it's a DataFrame, and it could be empty.
-        self.assertIsInstance(recommendations, pd.DataFrame, "Recommendations should be a DataFrame.")
-        if recommendations.empty:
-            print("Empty recommendations for new user, which is acceptable if no fallback is implemented.")
+
+        self.assertEqual(matched_title, "Toy Story")
+        self.assertNotIn("Toy Story", recommendations["title"].tolist())
+        self.assertIn("Toy Story 2", recommendations["title"].tolist())
+
+    def test_mood_recommendations_filter_to_mapped_genres(self):
+        recommendations = recommend_by_mood("happy", self.movies, watched_titles=set(), top_n=2)
+
+        self.assertFalse(recommendations.empty)
+        for genres in recommendations["genres"]:
+            self.assertTrue(any(genre in genres for genre in ["Comedy", "Family", "Animation", "Romance"]))
+
+    def test_watch_history_recommendations_are_unique_and_unwatched(self):
+        recommendations = recommend_based_on_watch_history_content(
+            ["Toy Story"],
+            self.movies_with_content,
+            self.tfidf_matrix,
+            self.movies,
+            top_n=3,
+        )
+
+        self.assertNotIn("Toy Story", recommendations["title"].tolist())
+        self.assertEqual(len(recommendations["movieId"]), recommendations["movieId"].nunique())
+
+    def test_svd_recommendations_use_fake_model_without_loading_real_model(self):
+        ratings = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 1, "rating": 5.0},
+                {"userId": 1, "movieId": 3, "rating": 4.0},
+            ]
+        )
+
+        recommendations = recommend_for_user(
+            1,
+            FakeSvdModel(),
+            self.movies,
+            ratings,
+            watched_titles=set(),
+            top_n=2,
+        )
+
+        self.assertEqual(recommendations["movieId"].tolist(), [2, 4])
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+
+    def test_missing_model_returns_error_without_import_failure(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model, error = load_surprise_model(Path(tmp_dir) / "missing.pkl")
+
+        self.assertIsNone(model)
+        self.assertIn("not found", error)
+
+    def test_tmdb_id_falls_back_to_links(self):
+        row = pd.Series({"movieId": 3, "title": "Heat"})
+        links = pd.DataFrame([{"movieId": 3, "tmdbId": 949}])
+
+        self.assertEqual(get_tmdb_id(row, links), 949)
+
+    def test_random_movie_returns_none_for_empty_filter(self):
+        movie = pick_random_movie(self.movies, selected_genres=["Documentary"])
+
+        self.assertIsNone(movie)
+
+    def test_app_import_smoke(self):
+        import app  # noqa: F401
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
-
-# Remove the duplicated class definition at the end of the file if it exists.
-# The previous content had a duplicated TestMovieRecommendations class.

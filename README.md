@@ -43,9 +43,9 @@ This project is a comprehensive movie recommendation system that suggests person
 2.  **Install Required Libraries:**
     It's recommended to create a virtual environment first.
     ```bash
-    python -m venv venv
-    source venv/bin/activate  # For Linux/macOS
-    # venv\Scripts\activate  # For Windows
+    python3.11 -m venv .venv
+    source .venv/bin/activate  # For Linux/macOS
+    # .venv\Scripts\activate  # For Windows
     ```
     Then, install the dependencies:
     ```bash
@@ -59,11 +59,11 @@ This project is a comprehensive movie recommendation system that suggests person
 
 4.  **Set Up Your TMDB API Key:**
     * Obtain a free API key from [The Movie Database (TMDB) API](https://www.themoviedb.org/documentation/api).
-    * Open the `src/config.py` file and set your API key in the `TMDB_API_KEY` variable:
-        ```python
-        TMDB_API_KEY = "YOUR_TMDB_API_KEY"
+    * Set it as an environment variable before launching Streamlit:
+        ```bash
+        export TMDB_API_KEY="YOUR_TMDB_API_KEY"
         ```
-    * **(Recommended Security Practice):** Instead of hardcoding your API key, consider using a `.env` file and the `python-dotenv` library to load it from environment variables. You would then need to update `config.py` and add `.env` to your `.gitignore` file.
+    * Alternatively, place it in `.streamlit/secrets.toml`. If no key is configured, the app still runs but disables posters and overviews.
 
 5.  **Run the Data Preprocessing Script:**
     This script will clean the raw data and save it to the `cleaned_data/` folder.
@@ -79,7 +79,7 @@ This project is a comprehensive movie recommendation system that suggests person
 
 7.  **Launch the Streamlit Application:**
     ```bash
-    streamlit run src/app.py
+    .venv/bin/streamlit run src/app.py
     ```
     The application will typically open in your web browser at `http://localhost:8501`.
 
