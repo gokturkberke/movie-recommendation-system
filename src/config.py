@@ -1,4 +1,5 @@
 import os
+import tomllib
 from pathlib import Path
 
 
@@ -19,7 +20,14 @@ def get_tmdb_api_key():
 
         return st.secrets.get("TMDB_API_KEY")
     except Exception:
-        return None
+        pass
+
+    secrets_path = PROJECT_ROOT / ".streamlit" / "secrets.toml"
+    if secrets_path.exists():
+        with secrets_path.open("rb") as secrets_file:
+            return tomllib.load(secrets_file).get("TMDB_API_KEY")
+
+    return None
 
 MOOD_GENRE_MAP = {
     "happy": ["Comedy", "Family", "Animation", "Romance"],
