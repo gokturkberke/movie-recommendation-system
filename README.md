@@ -5,10 +5,10 @@ This project is a comprehensive movie recommendation system that suggests person
 ## 🌟 Core Features
 
 * **Diverse Recommendation Strategies:**
-    * **Content-Based Recommendations:** Suggests similar movies by analyzing movie titles, genres, and tags (using TF-IDF and Cosine Similarity) based on a movie liked by the user or their watch history.
+    * **Content-Based Recommendations:** Retrieves similar movies by analyzing titles, genres, and tags with TF-IDF/cosine similarity, then re-ranks candidates with Bayesian rating, popularity, and light diversity signals.
     * **Collaborative Filtering (SVD):** Provides personalized recommendations based on users' past rating behavior (using the Surprise library and SVD algorithm).
-    * **Mood-Based Recommendations:** Offers random movie suggestions from genres uygun to the user's selected mood (e.g., Happy, Sad, Adventurous).
-    * **Personalized Content-Based Recommendations from Watch History:** Recommends new movies similar in content (genre, tags, etc.) to movies the user has previously watched, ensuring not to re-recommend watched movies.
+    * **Mood-Based Recommendations:** Offers random movie suggestions from genres mapped to the user's selected mood (e.g., Happy, Sad, Adventurous).
+    * **Personalized Content-Based Recommendations from Watch History:** Stores watched movies by `movieId`, then recommends new movies similar in content while avoiding already watched IDs.
     * **Random Movie Picker:** Displays a random movie and its information from the dataset.
 * **Interactive User Interface:**
     * A user-friendly web interface developed using [Streamlit](https://streamlit.io/).
@@ -23,7 +23,7 @@ This project is a comprehensive movie recommendation system that suggests person
 
 ## 🛠️ Technologies and Libraries Used
 
-* **Programming Language:** Python 3.x
+* **Programming Language:** Python 3.11
 * **Data Analysis and Manipulation:** Pandas, NumPy
 * **Machine Learning and Recommendation Algorithms:**
     * Scikit-learn (TF-IDF, Cosine Similarity)
@@ -36,7 +36,7 @@ This project is a comprehensive movie recommendation system that suggests person
 
 1.  **Clone the Repository:**
     ```bash
-    git clone [https://github.com/gokturkberke/movie-recommendation-system.git](https://github.com/gokturkberke/movie-recommendation-system.git)
+    git clone https://github.com/gokturkberke/movie-recommendation-system.git
     cd movie-recommendation-system
     ```
 
@@ -51,8 +51,6 @@ This project is a comprehensive movie recommendation system that suggests person
     ```bash
     pip install -r requirements.txt
     ```
-    *(Note: You'll need to create the `requirements.txt` file based on your project's libraries, e.g., by running `pip freeze > requirements.txt` in your activated virtual environment.)*
-
 3.  **Download the Dataset:**
     * Download the [MovieLens 25M Dataset](https://grouplens.org/datasets/movielens/25m/) (`ml-25m.zip`).
     * Extract the ZIP file and copy `links.csv`, `movies.csv`, `ratings.csv`, and `tags.csv` into the `data/` folder of your project.
@@ -88,11 +86,11 @@ This project is a comprehensive movie recommendation system that suggests person
 Once the application is running:
 
 1.  Select a recommendation method from the sidebar menu:
-    * **Content-Based Recommendation:** Enter a movie title you like to find similar movies.
+    * **Content-Based Recommendation:** Enter a movie title or select a close match to find hybrid-ranked similar movies.
     * **Collaborative Filtering:** Enter your user ID to get personalized recommendations.
     * **Mood-Based Recommendation:** Get movie suggestions based on your current mood.
     * **Random Movie:** Discover a random movie.
-    * **Watch History & Recommendations:** Add movies to your watch history and get recommendations based on it.
+    * **Watch History & Recommendations:** Add movies to your watch history and get recommendations based on their `movieId`.
     * **About & Help:** Explains recommendation methods and local setup requirements.
 2.  Input the required information (movie title, user ID, etc.) in the respective fields and click the "Get Recommendations" (or similar) button.
 3.  The results will be displayed, including movie titles, genres, posters, and summaries.

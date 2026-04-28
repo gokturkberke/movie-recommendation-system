@@ -7,24 +7,28 @@ from data_access import (
     load_links,
     load_movies,
     load_ratings,
+    load_ratings_for_stats,
     load_surprise_model,
     load_tags,
     merge_tmdb_ids,
 )
 from recommenders import (
     build_tfidf_matrix,
+    build_movie_stats,
+    normalize_movie_ids,
     pick_random_movie,
     recommend_based_on_watch_history_content,
     recommend_by_mood,
     recommend_for_persona,
     recommend_for_user,
     recommend_similar_movies,
+    recommend_similar_movies_by_id,
     suggest_movie_titles,
 )
 from tmdb_client import get_movie_details, get_tmdb_id
 
 
-APP_VERSION = "Movie Recommendation System v1.3"
+APP_VERSION = "Movie Recommendation System v1.4"
 
 
 @st.cache_data(show_spinner=False)
@@ -52,6 +56,11 @@ def cached_tfidf(movies, tags):
     return build_tfidf_matrix(movies, tags)
 
 
+@st.cache_data(show_spinner="Building movie rating statistics...")
+def cached_movie_stats():
+    return build_movie_stats(load_ratings_for_stats())
+
+
 @st.cache_resource(show_spinner=False)
 def cached_svd_model():
     return load_surprise_model()
@@ -63,8 +72,9 @@ def cached_tmdb_details(tmdb_id, api_key):
 
 
 def initialize_session_state():
-    if "watched_movies" not in st.session_state:
-        st.session_state.watched_movies = set()
+    if "watched_movie_ids" not in st.session_state:
+        st.session_state.watched_movie_ids = set()
+    st.session_state.watched_movie_ids = normalize_movie_ids(st.session_state.watched_movie_ids)
 
 
 def explain(text):
@@ -124,28 +134,30 @@ def render_movie_list(recommendations, links_df, tmdb_api_key, show_score=False)
 
 def render_content_based_page(context):
     st.success("**Content-Based Recommendation**")
-    explain("Uses TF-IDF over movie titles, genres, and tags, then ranks movies by cosine similarity.")
+    explain("Finds similar movies with TF-IDF, then re-ranks candidates with content similarity, Bayesian rating, popularity, and light diversity.")
 
     if not context["content_enabled"]:
         st.error("Content-based recommendations are unavailable because the TF-IDF matrix could not be built.")
         return
 
     movie_title = st.text_input("Enter a movie title you like:", key="content_movie_title")
+    selected_movie_id = None
     selected_title = None
     suggestions = suggest_movie_titles(movie_title, context["movies"], limit=8)
     if not suggestions.empty:
-        option_labels = [
-            f"{row.title} — {row.genres}"
-            for row in suggestions.itertuples(index=False)
-        ]
-        selected_label = st.selectbox(
+        option_lookup = {
+            index: f"{row.title} — {row.genres}"
+            for index, row in suggestions.iterrows()
+        }
+        selected_index = st.selectbox(
             "Closest matches in your dataset:",
-            options=["Select a match..."] + option_labels,
+            options=[None] + list(option_lookup.keys()),
+            format_func=lambda value: "Select a match..." if value is None else option_lookup[value],
             key="content_movie_suggestion",
         )
-        if selected_label != "Select a match...":
-            selected_index = option_labels.index(selected_label)
-            selected_title = suggestions.iloc[selected_index]["title"]
+        if selected_index is not None:
+            selected_movie_id = suggestions.loc[selected_index, "movieId"]
+            selected_title = suggestions.loc[selected_index, "title"]
         else:
             st.caption("Select one of these if your typed title is misspelled or ambiguous.")
 
@@ -157,14 +169,27 @@ def render_content_based_page(context):
         st.warning("Please enter a movie title.")
         return
 
-    recommendations, matched_title = recommend_similar_movies(
-        title_to_recommend,
-        context["movies_with_content"],
-        context["tfidf_matrix"],
-        context["movies"],
-        watched_titles=st.session_state.watched_movies,
-        top_n=10,
-    )
+    movie_stats = cached_movie_stats()
+    if selected_movie_id is not None:
+        recommendations, matched_title = recommend_similar_movies_by_id(
+            selected_movie_id,
+            context["movies_with_content"],
+            context["tfidf_matrix"],
+            context["movies"],
+            watched_movie_ids=st.session_state.watched_movie_ids,
+            movie_stats=movie_stats,
+            top_n=10,
+        )
+    else:
+        recommendations, matched_title = recommend_similar_movies(
+            title_to_recommend,
+            context["movies_with_content"],
+            context["tfidf_matrix"],
+            context["movies"],
+            watched_movie_ids=st.session_state.watched_movie_ids,
+            movie_stats=movie_stats,
+            top_n=10,
+        )
     if matched_title:
         st.info(f"Recommendations are based on: **{matched_title}**")
     render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
@@ -224,7 +249,7 @@ def render_collaborative_page(context):
             model,
             context["movies"],
             ratings,
-            watched_titles=st.session_state.watched_movies,
+            watched_movie_ids=st.session_state.watched_movie_ids,
             top_n=10,
         )
         render_movie_list(recommendations, context["links"], context["tmdb_api_key"], show_score=True)
@@ -235,7 +260,7 @@ def render_collaborative_page(context):
             model,
             context["movies"],
             ratings,
-            watched_titles=st.session_state.watched_movies,
+            watched_movie_ids=st.session_state.watched_movie_ids,
             top_n=10,
         )
         render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
@@ -252,7 +277,7 @@ def render_mood_page(context):
     recommendations = recommend_by_mood(
         mood,
         context["movies"],
-        watched_titles=st.session_state.watched_movies,
+        watched_movie_ids=st.session_state.watched_movie_ids,
         top_n=10,
     )
     render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
@@ -287,40 +312,51 @@ def render_random_page(context):
 
 def render_watch_history_page(context):
     st.success("**Watch History & Personalized Recommendations**")
-    explain("Treats your watched movies as content seeds, combines similar-title results, and removes watched titles.")
+    explain("Treats your watched movie IDs as content seeds, combines similar results, and removes already watched movies.")
 
-    all_titles = context["movies"]["title"].dropna().sort_values().unique().tolist()
-    selectable_titles = [title for title in all_titles if title not in st.session_state.watched_movies]
+    watched_ids = normalize_movie_ids(st.session_state.watched_movie_ids)
+    st.session_state.watched_movie_ids = watched_ids
+
+    movies_by_id = context["movies"].drop_duplicates(subset=["movieId"]).copy()
+    movies_by_id = movies_by_id.dropna(subset=["movieId"])
+    title_lookup = dict(zip(movies_by_id["movieId"].astype(int), movies_by_id["title"]))
+
+    selectable_movies = movies_by_id[~movies_by_id["movieId"].isin(watched_ids)].sort_values("title")
+    selectable_movie_ids = selectable_movies["movieId"].astype(int).tolist()
 
     selected_to_add = st.multiselect(
         "Select movies to add to your watch history:",
-        options=selectable_titles,
+        options=selectable_movie_ids,
+        format_func=lambda movie_id: title_lookup.get(movie_id, f"Movie ID {movie_id}"),
         key="watch_history_add",
     )
     if st.button("Add Selected to Watch History", key="watch_history_add_button"):
         if not selected_to_add:
             st.warning("Please select at least one movie.")
         else:
-            st.session_state.watched_movies.update(selected_to_add)
+            st.session_state.watched_movie_ids.update(normalize_movie_ids(selected_to_add))
             st.success(f"{len(selected_to_add)} movie(s) added.")
             st.rerun()
 
-    watched_titles = sorted(st.session_state.watched_movies)
-    if watched_titles:
-        watched_df = pd.DataFrame(watched_titles, columns=["Title"])
+    watched_ids = normalize_movie_ids(st.session_state.watched_movie_ids)
+    watched_movies = movies_by_id[movies_by_id["movieId"].isin(watched_ids)].sort_values("title")
+    watched_movie_ids = watched_movies["movieId"].astype(int).tolist()
+    if watched_movie_ids:
+        watched_df = watched_movies[["title", "genres"]].rename(columns={"title": "Title", "genres": "Genres"})
         watched_df.index = range(1, len(watched_df) + 1)
         st.dataframe(watched_df, use_container_width=True, height=min(300, len(watched_df) * 40 + 40))
 
         selected_to_remove = st.multiselect(
             "Select movies to remove:",
-            options=watched_titles,
+            options=watched_movie_ids,
+            format_func=lambda movie_id: title_lookup.get(movie_id, f"Movie ID {movie_id}"),
             key="watch_history_remove",
         )
         if st.button("Remove Selected", key="watch_history_remove_button"):
             if not selected_to_remove:
                 st.warning("Please select at least one movie.")
             else:
-                st.session_state.watched_movies.difference_update(selected_to_remove)
+                st.session_state.watched_movie_ids.difference_update(normalize_movie_ids(selected_to_remove))
                 st.success(f"{len(selected_to_remove)} movie(s) removed.")
                 st.rerun()
     else:
@@ -329,18 +365,20 @@ def render_watch_history_page(context):
     if not st.button("Get Recommendations Based on Watch History", key="watch_history_get_recommendations"):
         return
 
-    if not st.session_state.watched_movies:
+    if not st.session_state.watched_movie_ids:
         st.warning("Add movies to your watch history first.")
         return
     if not context["content_enabled"]:
         st.error("Content-based components are unavailable.")
         return
 
+    movie_stats = cached_movie_stats()
     recommendations = recommend_based_on_watch_history_content(
-        list(st.session_state.watched_movies),
+        list(st.session_state.watched_movie_ids),
         context["movies_with_content"],
         context["tfidf_matrix"],
         context["movies"],
+        movie_stats=movie_stats,
         top_n=10,
     )
     render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
@@ -353,13 +391,13 @@ def render_about_page(context):
         """
         ### Recommendation methods
 
-        **Content-Based:** compares title, genre, and tag text with TF-IDF and cosine similarity.
+        **Content-Based:** retrieves similar movies with TF-IDF over title, genre, and tag text, then re-ranks them with similarity, Bayesian rating, popularity, and light diversity.
 
         **Collaborative Filtering:** uses a trained Surprise SVD model to estimate ratings for unseen movies.
 
-        **Mood-Based:** maps moods to genre groups and samples from matching movies.
+        **Mood-Based:** maps moods to genre groups and samples unwatched movies from matching genres.
 
-        **Watch History:** uses your watched movies as content seeds and merges the strongest similar results.
+        **Watch History:** stores watched movies by `movieId`, uses them as content seeds, and merges the strongest hybrid-ranked results.
 
         ### Local data
 

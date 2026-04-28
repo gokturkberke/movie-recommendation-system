@@ -1,3 +1,4 @@
+import math
 import re
 
 import pandas as pd
@@ -9,6 +10,22 @@ from config import INITIAL_CANDIDATE_POOL_SIZE, MOOD_GENRE_MAP
 
 
 BASE_OUTPUT_COLUMNS = ["movieId", "title", "genres"]
+CONTENT_CANDIDATE_POOL_SIZE = 100
+BAYESIAN_MIN_RATINGS = 100
+HYBRID_SCORE_COLUMNS = [
+    "similarity_score",
+    "final_score",
+    "bayesian_rating",
+    "rating_count",
+    "popularity_score",
+    "diversity_bonus",
+]
+HYBRID_WEIGHTS = {
+    "content_similarity": 0.60,
+    "bayesian_rating": 0.25,
+    "popularity": 0.10,
+    "diversity": 0.05,
+}
 
 
 def clean_text(text):
@@ -30,11 +47,184 @@ def output_columns(movies):
 def ensure_output_columns(df, movies=None, include_score=None):
     columns = output_columns(movies if movies is not None else df)
     if include_score:
-        columns.append(include_score)
+        if isinstance(include_score, (list, tuple)):
+            columns.extend(include_score)
+        else:
+            columns.append(include_score)
     for column in columns:
         if column not in df.columns:
             df[column] = pd.NA
     return df[columns]
+
+
+def normalize_movie_ids(movie_ids):
+    if movie_ids is None:
+        return set()
+
+    if isinstance(movie_ids, (str, bytes)) or not hasattr(movie_ids, "__iter__"):
+        movie_ids = [movie_ids]
+
+    normalized = set()
+    for movie_id in movie_ids:
+        if pd.isna(movie_id):
+            continue
+        try:
+            normalized.add(int(movie_id))
+        except (TypeError, ValueError):
+            normalized.add(movie_id)
+    return normalized
+
+
+def filter_watched_movies(df, watched_movie_ids):
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    if not watched_ids or df.empty or "movieId" not in df.columns:
+        return df
+    return df[~df["movieId"].isin(watched_ids)]
+
+
+def numeric_series(df, column, default=0.0):
+    if column not in df.columns:
+        return pd.Series(default, index=df.index, dtype="float64")
+    return pd.to_numeric(df[column], errors="coerce").fillna(default)
+
+
+def movie_ids_from_titles(titles, movies):
+    if titles is None or movies.empty or "title" not in movies.columns:
+        return set()
+    if isinstance(titles, (str, bytes)) or not hasattr(titles, "__iter__"):
+        titles = [titles]
+    titles = list(titles)
+    if not titles:
+        return set()
+    matched = movies[movies["title"].isin(set(titles))]
+    if matched.empty or "movieId" not in matched.columns:
+        return set()
+    return normalize_movie_ids(matched["movieId"])
+
+
+def build_movie_stats(ratings, min_rating_count=BAYESIAN_MIN_RATINGS):
+    columns = [
+        "movieId",
+        "avg_rating",
+        "rating_count",
+        "bayesian_rating",
+        "bayesian_rating_normalized",
+        "popularity_score",
+    ]
+    if ratings is None or ratings.empty or not {"movieId", "rating"}.issubset(ratings.columns):
+        return pd.DataFrame(columns=columns)
+
+    ratings_copy = ratings[["movieId", "rating"]].copy()
+    ratings_copy["rating"] = pd.to_numeric(ratings_copy["rating"], errors="coerce")
+    ratings_copy = ratings_copy.dropna(subset=["movieId", "rating"])
+    if ratings_copy.empty:
+        return pd.DataFrame(columns=columns)
+
+    stats = (
+        ratings_copy.groupby("movieId")["rating"]
+        .agg(avg_rating="mean", rating_count="count")
+        .reset_index()
+    )
+    global_mean = ratings_copy["rating"].mean()
+    v = stats["rating_count"].astype(float)
+    r = stats["avg_rating"].astype(float)
+    m = float(min_rating_count)
+    stats["bayesian_rating"] = (v / (v + m)) * r + (m / (v + m)) * global_mean
+    stats["bayesian_rating_normalized"] = (stats["bayesian_rating"] / 5.0).clip(0, 1)
+
+    max_count = stats["rating_count"].max()
+    if max_count and max_count > 0:
+        max_popularity = math.log(float(max_count) + 1.0)
+        stats["popularity_score"] = stats["rating_count"].astype(float).add(1.0).apply(math.log) / max_popularity
+    else:
+        stats["popularity_score"] = 0.0
+
+    return stats[columns]
+
+
+def split_genres(genres):
+    if pd.isna(genres):
+        return set()
+    return {
+        genre.strip()
+        for genre in str(genres).split("|")
+        if genre.strip() and genre.strip() != "(no genres listed)"
+    }
+
+
+def genre_overlap_ratio(left, right):
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def rerank_hybrid_candidates(candidates, movie_stats=None, top_n=10):
+    if candidates.empty:
+        return candidates
+
+    reranked = candidates.copy()
+    reranked = reranked.drop(
+        columns=[column for column in ["final_score", "base_score", "diversity_bonus"] if column in reranked.columns],
+        errors="ignore",
+    )
+    reranked["similarity_score"] = numeric_series(reranked, "similarity_score", 0.0)
+
+    if movie_stats is None or movie_stats.empty:
+        reranked["final_score"] = reranked["similarity_score"]
+        reranked["bayesian_rating"] = pd.NA
+        reranked["rating_count"] = pd.NA
+        reranked["popularity_score"] = 0.0
+        reranked["diversity_bonus"] = 0.0
+        return reranked.sort_values("final_score", ascending=False).head(top_n).reset_index(drop=True)
+
+    stat_columns = [
+        "movieId",
+        "bayesian_rating",
+        "bayesian_rating_normalized",
+        "rating_count",
+        "popularity_score",
+    ]
+    available_stat_columns = [column for column in stat_columns if column in movie_stats.columns]
+    reranked = reranked.drop(
+        columns=[column for column in available_stat_columns if column != "movieId" and column in reranked.columns],
+        errors="ignore",
+    )
+    reranked = reranked.merge(movie_stats[available_stat_columns], on="movieId", how="left")
+    for column in ["bayesian_rating_normalized", "popularity_score"]:
+        reranked[column] = numeric_series(reranked, column, 0.0)
+
+    reranked["base_score"] = (
+        HYBRID_WEIGHTS["content_similarity"] * reranked["similarity_score"]
+        + HYBRID_WEIGHTS["bayesian_rating"] * reranked["bayesian_rating_normalized"]
+        + HYBRID_WEIGHTS["popularity"] * reranked["popularity_score"]
+    )
+
+    remaining = reranked.copy()
+    selected_rows = []
+    selected_genres = []
+    while not remaining.empty and len(selected_rows) < top_n:
+        scored = []
+        for index, row in remaining.iterrows():
+            candidate_genres = split_genres(row.get("genres", ""))
+            if not selected_genres:
+                diversity_bonus = 1.0
+            else:
+                max_overlap = max(genre_overlap_ratio(candidate_genres, genres) for genres in selected_genres)
+                diversity_bonus = 1.0 - max_overlap
+            final_score = row["base_score"] + HYBRID_WEIGHTS["diversity"] * diversity_bonus
+            scored.append((final_score, row["base_score"], row["similarity_score"], index, diversity_bonus))
+
+        _, _, _, best_index, best_diversity = max(scored, key=lambda item: (item[0], item[1], item[2]))
+        best_row = remaining.loc[best_index].copy()
+        best_row["diversity_bonus"] = best_diversity
+        best_row["final_score"] = best_row["base_score"] + HYBRID_WEIGHTS["diversity"] * best_diversity
+        selected_rows.append(best_row)
+        selected_genres.append(split_genres(best_row.get("genres", "")))
+        remaining = remaining.drop(index=best_index)
+
+    if not selected_rows:
+        return pd.DataFrame(columns=reranked.columns)
+    return pd.DataFrame(selected_rows).reset_index(drop=True)
 
 
 def build_tfidf_matrix(movies, tags):
@@ -93,6 +283,16 @@ def find_movie_match(movie_title, movies_with_content):
     if best_score > 80:
         return best_index
     return None
+
+
+def find_movie_match_by_id(movie_id, movies_with_content):
+    movie_ids = normalize_movie_ids([movie_id])
+    if not movie_ids or movies_with_content.empty or "movieId" not in movies_with_content.columns:
+        return None
+    matches = movies_with_content[movies_with_content["movieId"].isin(movie_ids)]
+    if matches.empty:
+        return None
+    return matches.index[0]
 
 
 def title_match_score(query, candidate):
@@ -165,12 +365,14 @@ def recommend_similar_movies(
     movies_with_content,
     tfidf_matrix,
     movies_for_output,
+    watched_movie_ids=None,
     watched_titles=None,
+    movie_stats=None,
     top_n=10,
-    internal_candidate_count=20,
+    internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
 ):
     columns = output_columns(movies_for_output)
-    empty = pd.DataFrame(columns=columns + ["similarity_score"])
+    empty = pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)
     if tfidf_matrix is None or movies_with_content.empty:
         return empty, None
 
@@ -178,6 +380,63 @@ def recommend_similar_movies(
     if match_index is None:
         return empty, None
 
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    watched_ids.update(movie_ids_from_titles(watched_titles, movies_for_output))
+    return build_recommendations_from_match_index(
+        match_index,
+        movies_with_content,
+        tfidf_matrix,
+        movies_for_output,
+        watched_movie_ids=watched_ids,
+        movie_stats=movie_stats,
+        top_n=top_n,
+        internal_candidate_count=internal_candidate_count,
+    )
+
+
+def recommend_similar_movies_by_id(
+    movie_id,
+    movies_with_content,
+    tfidf_matrix,
+    movies_for_output,
+    watched_movie_ids=None,
+    movie_stats=None,
+    top_n=10,
+    internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
+):
+    columns = output_columns(movies_for_output)
+    empty = pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)
+    if tfidf_matrix is None or movies_with_content.empty:
+        return empty, None
+
+    match_index = find_movie_match_by_id(movie_id, movies_with_content)
+    if match_index is None:
+        return empty, None
+
+    return build_recommendations_from_match_index(
+        match_index,
+        movies_with_content,
+        tfidf_matrix,
+        movies_for_output,
+        watched_movie_ids=watched_movie_ids,
+        movie_stats=movie_stats,
+        top_n=top_n,
+        internal_candidate_count=internal_candidate_count,
+    )
+
+
+def build_recommendations_from_match_index(
+    match_index,
+    movies_with_content,
+    tfidf_matrix,
+    movies_for_output,
+    watched_movie_ids=None,
+    movie_stats=None,
+    top_n=10,
+    internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
+):
+    columns = output_columns(movies_for_output)
+    empty = pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)
     matched_movie_id = movies_with_content.loc[match_index, "movieId"]
     matched_row = movies_for_output[movies_for_output["movieId"] == matched_movie_id]
     if matched_row.empty:
@@ -185,9 +444,10 @@ def recommend_similar_movies(
     else:
         matched_title = matched_row["title"].iloc[0]
 
-    cosine_sim_vector = cosine_similarity(tfidf_matrix[match_index], tfidf_matrix).flatten()
+    match_position = movies_with_content.index.get_loc(match_index)
+    cosine_sim_vector = cosine_similarity(tfidf_matrix[match_position], tfidf_matrix).flatten()
     similar_indices = cosine_sim_vector.argsort()[-(internal_candidate_count + 1) :][::-1]
-    similar_indices = [idx for idx in similar_indices if idx != match_index][:internal_candidate_count]
+    similar_indices = [idx for idx in similar_indices if idx != match_position][:internal_candidate_count]
     if not similar_indices:
         return empty, matched_title
 
@@ -195,61 +455,22 @@ def recommend_similar_movies(
     scores["similarity_score"] = cosine_sim_vector[similar_indices]
     recommendations = movies_for_output[movies_for_output["movieId"].isin(scores["movieId"])].copy()
     recommendations = recommendations.merge(scores, on="movieId", how="left")
-
-    if watched_titles and "title" in recommendations.columns:
-        recommendations = recommendations[~recommendations["title"].isin(set(watched_titles))]
-
-    recommendations = recommendations.sort_values("similarity_score", ascending=False)
-    return ensure_output_columns(recommendations, movies_for_output, "similarity_score").head(top_n).reset_index(drop=True), matched_title
+    recommendations = filter_watched_movies(recommendations, watched_movie_ids)
+    recommendations = rerank_hybrid_candidates(recommendations, movie_stats=movie_stats, top_n=top_n)
+    return ensure_output_columns(recommendations, movies_for_output, HYBRID_SCORE_COLUMNS).head(top_n).reset_index(drop=True), matched_title
 
 
-def extract_watched_movies_and_genres(watched_titles, movies, similarity_threshold=85):
-    if not watched_titles or movies.empty:
+def extract_watched_movies_and_genres(watched_movie_ids, movies):
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    if not watched_ids or movies.empty or "movieId" not in movies.columns:
         return pd.DataFrame(), set()
 
     movies_copy = movies.copy()
-    movies_copy["title"] = movies_copy["title"].astype(str)
-    watched_frames = []
-    remaining_titles = list(watched_titles)
-
-    for title_query in watched_titles:
-        exact_matches = movies_copy[movies_copy["title"] == str(title_query)]
-        if not exact_matches.empty:
-            watched_frames.append(exact_matches)
-            if title_query in remaining_titles:
-                remaining_titles.remove(title_query)
-
-    already_added_movie_ids = set()
-    if watched_frames:
-        exact_df = pd.concat(watched_frames)
-        already_added_movie_ids.update(exact_df["movieId"].unique())
-
-    if remaining_titles and "title_for_matching" in movies_copy.columns:
-        movies_copy["title_for_matching_fuzzy"] = movies_copy["title_for_matching"].fillna("").astype(str).apply(clean_text)
-        for title_query in remaining_titles:
-            cleaned_title = clean_text(title_query)
-            if not cleaned_title:
-                continue
-
-            best_score = 0
-            best_index = None
-            for index, row in movies_copy.iterrows():
-                if row.get("movieId") in already_added_movie_ids:
-                    continue
-                score = fuzz.partial_ratio(cleaned_title, row["title_for_matching_fuzzy"])
-                if score > best_score:
-                    best_score = score
-                    best_index = index
-
-            if best_score >= similarity_threshold and best_index is not None:
-                movie_id = movies_copy.loc[best_index, "movieId"]
-                watched_frames.append(movies_copy.loc[[best_index]])
-                already_added_movie_ids.add(movie_id)
-
-    if not watched_frames:
+    watched_df = movies_copy[movies_copy["movieId"].isin(watched_ids)].drop_duplicates(subset=["movieId"])
+    if watched_df.empty:
         return pd.DataFrame(), set()
 
-    watched_df = pd.concat(watched_frames).drop_duplicates(subset=["movieId"]).reset_index(drop=True)
+    watched_df = watched_df.reset_index(drop=True)
     genres = set()
     if "genres" in watched_df.columns:
         for genres_str in watched_df["genres"].dropna().values:
@@ -264,27 +485,25 @@ def genre_based_recommendations(movies, genres, watched_movie_ids, top_n):
 
     matches = movies[movies["genres"].apply(lambda value: isinstance(value, str) and any(genre in value.split("|") for genre in genres))]
     recommendations = matches.copy()
-    if watched_movie_ids is not None and not watched_movie_ids.empty:
-        recommendations = recommendations[~recommendations["movieId"].isin(watched_movie_ids)]
+    recommendations = filter_watched_movies(recommendations, watched_movie_ids)
     return ensure_output_columns(recommendations, movies).head(top_n).reset_index(drop=True)
 
 
 def fallback_recommendations(movies, watched_movie_ids, top_n):
     recommendations = movies.copy()
-    if watched_movie_ids is not None and not watched_movie_ids.empty:
-        recommendations = recommendations[~recommendations["movieId"].isin(watched_movie_ids)]
+    recommendations = filter_watched_movies(recommendations, watched_movie_ids)
     if recommendations.empty:
         return pd.DataFrame(columns=output_columns(movies))
     sample_size = min(top_n, len(recommendations))
     return ensure_output_columns(recommendations.sample(n=sample_size, random_state=42), movies).reset_index(drop=True)
 
 
-def recommend_by_watched_genres(watched_titles, movies, top_n=10):
+def recommend_by_watched_genres(watched_movie_ids, movies, top_n=10):
     columns = output_columns(movies)
-    if not watched_titles:
+    if not normalize_movie_ids(watched_movie_ids):
         return pd.DataFrame(columns=columns)
 
-    watched_movies, genres = extract_watched_movies_and_genres(watched_titles, movies.copy())
+    watched_movies, genres = extract_watched_movies_and_genres(watched_movie_ids, movies.copy())
     watched_ids = watched_movies["movieId"] if not watched_movies.empty and "movieId" in watched_movies.columns else pd.Series(dtype="int64")
     recommendations = genre_based_recommendations(movies, genres, watched_ids, top_n)
     if recommendations.empty:
@@ -292,26 +511,29 @@ def recommend_by_watched_genres(watched_titles, movies, top_n=10):
     return ensure_output_columns(recommendations, movies).head(top_n).reset_index(drop=True)
 
 
-def recommend_based_on_watch_history_content(watched_titles, movies_with_content, tfidf_matrix, movies, top_n=10):
-    if not watched_titles:
+def recommend_based_on_watch_history_content(
+    watched_movie_ids,
+    movies_with_content,
+    tfidf_matrix,
+    movies,
+    movie_stats=None,
+    top_n=10,
+):
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    if not watched_ids:
         return pd.DataFrame(columns=output_columns(movies))
 
-    watched_movies, _ = extract_watched_movies_and_genres(watched_titles, movies.copy())
-    if not watched_movies.empty and "title" in watched_movies.columns:
-        watched_titles_to_exclude = set(watched_movies["title"].unique())
-    else:
-        watched_titles_to_exclude = set(watched_titles)
-
     recommendation_frames = []
-    for seed_title in watched_titles:
-        seed_recommendations, matched_title = recommend_similar_movies(
-            seed_title,
+    for seed_movie_id in watched_ids:
+        seed_recommendations, matched_title = recommend_similar_movies_by_id(
+            seed_movie_id,
             movies_with_content,
             tfidf_matrix,
             movies,
-            watched_titles=watched_titles_to_exclude,
+            watched_movie_ids=watched_ids,
+            movie_stats=movie_stats,
             top_n=top_n + 5,
-            internal_candidate_count=top_n + 15,
+            internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
         )
         if matched_title and not seed_recommendations.empty:
             recommendation_frames.append(seed_recommendations)
@@ -320,13 +542,14 @@ def recommend_based_on_watch_history_content(watched_titles, movies_with_content
         return pd.DataFrame(columns=output_columns(movies))
 
     combined = pd.concat(recommendation_frames)
-    combined = combined.sort_values("similarity_score", ascending=False)
+    combined = combined.sort_values("final_score", ascending=False)
     combined = combined.drop_duplicates(subset=["movieId"], keep="first")
-    combined = combined[~combined["title"].isin(watched_titles_to_exclude)]
-    return ensure_output_columns(combined, movies).head(top_n).reset_index(drop=True)
+    combined = filter_watched_movies(combined, watched_ids)
+    combined = rerank_hybrid_candidates(combined, movie_stats=movie_stats, top_n=top_n)
+    return ensure_output_columns(combined, movies, HYBRID_SCORE_COLUMNS).head(top_n).reset_index(drop=True)
 
 
-def recommend_by_mood(mood, movies, watched_titles=None, top_n=10):
+def recommend_by_mood(mood, movies, watched_movie_ids=None, watched_titles=None, top_n=10):
     columns = output_columns(movies)
     genres_for_mood = MOOD_GENRE_MAP.get(str(mood).lower())
     if not genres_for_mood or movies.empty:
@@ -339,10 +562,11 @@ def recommend_by_mood(mood, movies, watched_titles=None, top_n=10):
     if filtered.empty:
         return pd.DataFrame(columns=columns)
 
-    sample_size = min(top_n + (len(watched_titles) if watched_titles else 0) + 5, len(filtered))
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    watched_ids.update(movie_ids_from_titles(watched_titles, movies))
+    sample_size = min(top_n + len(watched_ids) + 5, len(filtered))
     recommendations = filtered.sample(n=sample_size, random_state=42)
-    if watched_titles:
-        recommendations = recommendations[~recommendations["title"].isin(set(watched_titles))]
+    recommendations = filter_watched_movies(recommendations, watched_ids)
     return ensure_output_columns(recommendations, movies).head(top_n).reset_index(drop=True)
 
 
@@ -387,19 +611,22 @@ def raw_svd_predictions(user_id, model, movies, ratings, candidate_pool_size=Non
     return predictions_df
 
 
-def recommend_for_user(user_id, model, movies, ratings, watched_titles=None, top_n=10):
-    pool_size = top_n + (len(watched_titles) if watched_titles else 0) + 20
+def recommend_for_user(user_id, model, movies, ratings, watched_movie_ids=None, watched_titles=None, top_n=10):
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    watched_ids.update(movie_ids_from_titles(watched_titles, movies))
+    pool_size = top_n + len(watched_ids) + 20
     predictions = raw_svd_predictions(user_id, model, movies, ratings, candidate_pool_size=pool_size)
     if predictions.empty:
         return pd.DataFrame(columns=output_columns(movies))
 
     recommendations = predictions[["movieId"]].merge(movies[output_columns(movies)], on="movieId", how="left")
-    if watched_titles and "title" in recommendations.columns:
-        recommendations = recommendations[~recommendations["title"].isin(set(watched_titles))]
+    recommendations = filter_watched_movies(recommendations, watched_ids)
     return ensure_output_columns(recommendations, movies).head(top_n).reset_index(drop=True)
 
 
-def recommend_for_persona(user_id, target_genre_columns, model, movies, ratings, watched_titles=None, top_n=10):
+def recommend_for_persona(user_id, target_genre_columns, model, movies, ratings, watched_movie_ids=None, watched_titles=None, top_n=10):
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    watched_ids.update(movie_ids_from_titles(watched_titles, movies))
     predictions = raw_svd_predictions(
         user_id,
         model,
@@ -419,7 +646,6 @@ def recommend_for_persona(user_id, target_genre_columns, model, movies, ratings,
             candidates[column] = candidates[column].fillna(0).astype(int)
         candidates = candidates[candidates[valid_target_columns].sum(axis=1) > 0]
 
-    if watched_titles and "title" in candidates.columns:
-        candidates = candidates[~candidates["title"].isin(set(watched_titles))]
+    candidates = filter_watched_movies(candidates, watched_ids)
 
     return ensure_output_columns(candidates, movies, "predicted_score").head(top_n).reset_index(drop=True)

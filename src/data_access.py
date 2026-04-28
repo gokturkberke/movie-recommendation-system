@@ -59,6 +59,20 @@ def load_ratings(data_dir=CLEANED_DATA_DIR):
     return ratings
 
 
+def load_ratings_for_stats(data_dir=CLEANED_DATA_DIR):
+    path = Path(data_dir) / "ratings_clean.csv"
+    try:
+        return pd.read_csv(
+            path,
+            usecols=["movieId", "rating"],
+            dtype={"movieId": "int32", "rating": "float32"},
+        )
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["movieId", "rating"])
+    except (pd.errors.EmptyDataError, ValueError):
+        return pd.DataFrame(columns=["movieId", "rating"])
+
+
 def load_links(data_dir=DATA_DIR):
     links = load_csv(Path(data_dir) / "links.csv")
     if links.empty:

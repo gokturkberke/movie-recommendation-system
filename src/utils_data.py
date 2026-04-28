@@ -29,8 +29,8 @@ def _get_raw_svd_predictions(user_id, surprise_model, movies_df, ratings_df, can
     return raw_svd_predictions(user_id, surprise_model, movies_df, ratings_df, candidate_pool_size)
 
 
-def _extract_watched_movies_and_genres(watched_titles, movies_input_df, similarity_threshold=85):
-    return extract_watched_movies_and_genres(watched_titles, movies_input_df, similarity_threshold)
+def _extract_watched_movies_and_genres(watched_movie_ids, movies_input_df, similarity_threshold=85):
+    return extract_watched_movies_and_genres(watched_movie_ids, movies_input_df)
 
 
 def _get_genre_based_recommendations(movies_df, all_genres_set, watched_movie_ids, top_n):

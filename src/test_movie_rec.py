@@ -7,14 +7,17 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from data_access import latest_release_info, load_movies, load_surprise_model
+from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
 from recommenders import (
+    build_movie_stats,
     build_tfidf_matrix,
     pick_random_movie,
     recommend_based_on_watch_history_content,
     recommend_by_mood,
     recommend_for_user,
     recommend_similar_movies,
+    recommend_similar_movies_by_id,
+    rerank_hybrid_candidates,
 )
 from tmdb_client import get_tmdb_id
 
@@ -107,13 +110,68 @@ class TestMovieRecommendations(unittest.TestCase):
             self.movies_with_content,
             self.tfidf_matrix,
             self.movies,
-            watched_titles={"Toy Story"},
+            watched_movie_ids={1},
             top_n=3,
         )
 
         self.assertEqual(matched_title, "Toy Story")
         self.assertNotIn("Toy Story", recommendations["title"].tolist())
         self.assertIn("Toy Story 2", recommendations["title"].tolist())
+
+    def test_watch_history_uses_movie_id_not_duplicate_title(self):
+        movies = pd.DataFrame(
+            [
+                {
+                    "movieId": 10,
+                    "title": "Sabrina (1954)",
+                    "genres": "Comedy|Romance",
+                    "title_for_matching": "sabrina",
+                    "genres_for_matching": "comedy romance",
+                },
+                {
+                    "movieId": 11,
+                    "title": "Sabrina (1995)",
+                    "genres": "Comedy|Romance",
+                    "title_for_matching": "sabrina",
+                    "genres_for_matching": "comedy romance",
+                },
+                {
+                    "movieId": 12,
+                    "title": "Father of the Bride (1995)",
+                    "genres": "Comedy",
+                    "title_for_matching": "father of the bride",
+                    "genres_for_matching": "comedy",
+                },
+            ]
+        )
+        tags = pd.DataFrame(columns=["userId", "movieId", "tag", "timestamp"])
+        tfidf_matrix, _, movies_with_content = build_tfidf_matrix(movies.copy(), tags)
+
+        recommendations = recommend_based_on_watch_history_content(
+            [10],
+            movies_with_content,
+            tfidf_matrix,
+            movies,
+            top_n=5,
+        )
+
+        self.assertNotIn(10, recommendations["movieId"].tolist())
+        self.assertIn(11, recommendations["movieId"].tolist())
+        self.assertIn("Sabrina (1995)", recommendations["title"].tolist())
+
+    def test_content_recommendation_can_start_from_movie_id(self):
+        recommendations, matched_title = recommend_similar_movies_by_id(
+            1,
+            self.movies_with_content,
+            self.tfidf_matrix,
+            self.movies,
+            watched_movie_ids={1},
+            top_n=3,
+        )
+
+        self.assertEqual(matched_title, "Toy Story")
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+        self.assertIn(2, recommendations["movieId"].tolist())
 
     def test_movie_title_suggestions_handle_common_typo(self):
         movies = pd.concat(
@@ -150,15 +208,65 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertNotIn("OKA! (2011)", suggestions["title"].tolist())
 
     def test_mood_recommendations_filter_to_mapped_genres(self):
-        recommendations = recommend_by_mood("happy", self.movies, watched_titles=set(), top_n=2)
+        recommendations = recommend_by_mood("happy", self.movies, watched_movie_ids=set(), top_n=2)
 
         self.assertFalse(recommendations.empty)
         for genres in recommendations["genres"]:
             self.assertTrue(any(genre in genres for genre in ["Comedy", "Family", "Animation", "Romance"]))
 
+    def test_movie_stats_build_bayesian_and_popularity_signals(self):
+        ratings = pd.DataFrame(
+            [
+                {"movieId": 1, "rating": 5.0},
+                {"movieId": 2, "rating": 4.0},
+                {"movieId": 2, "rating": 4.0},
+                {"movieId": 2, "rating": 4.0},
+            ]
+        )
+
+        stats = build_movie_stats(ratings, min_rating_count=2)
+        sparse_movie = stats[stats["movieId"] == 1].iloc[0]
+        popular_movie = stats[stats["movieId"] == 2].iloc[0]
+
+        self.assertEqual(sparse_movie["rating_count"], 1)
+        self.assertLess(sparse_movie["bayesian_rating"], 5.0)
+        self.assertGreater(popular_movie["popularity_score"], sparse_movie["popularity_score"])
+
+    def test_hybrid_reranking_can_promote_trusted_popular_candidate(self):
+        candidates = pd.DataFrame(
+            [
+                {"movieId": 2, "title": "Sparse Similar", "genres": "Drama", "similarity_score": 0.80},
+                {"movieId": 3, "title": "Trusted Similar", "genres": "Drama", "similarity_score": 0.76},
+            ]
+        )
+        movie_stats = pd.DataFrame(
+            [
+                {
+                    "movieId": 2,
+                    "bayesian_rating": 2.5,
+                    "bayesian_rating_normalized": 0.50,
+                    "rating_count": 2,
+                    "popularity_score": 0.10,
+                },
+                {
+                    "movieId": 3,
+                    "bayesian_rating": 4.6,
+                    "bayesian_rating_normalized": 0.92,
+                    "rating_count": 500,
+                    "popularity_score": 1.00,
+                },
+            ]
+        )
+
+        reranked = rerank_hybrid_candidates(candidates, movie_stats=movie_stats, top_n=2)
+
+        self.assertEqual(reranked.iloc[0]["movieId"], 3)
+        self.assertIn("final_score", reranked.columns)
+        self.assertGreater(reranked.iloc[0]["final_score"], reranked.iloc[1]["final_score"])
+
     def test_watch_history_recommendations_are_unique_and_unwatched(self):
         recommendations = recommend_based_on_watch_history_content(
-            ["Toy Story"],
+            [1],
             self.movies_with_content,
             self.tfidf_matrix,
             self.movies,
@@ -181,7 +289,7 @@ class TestMovieRecommendations(unittest.TestCase):
             FakeSvdModel(),
             self.movies,
             ratings,
-            watched_titles=set(),
+            watched_movie_ids=set(),
             top_n=2,
         )
 
@@ -194,6 +302,13 @@ class TestMovieRecommendations(unittest.TestCase):
 
         self.assertIsNone(model)
         self.assertIn("not found", error)
+
+    def test_missing_ratings_for_stats_returns_empty_frame(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ratings = load_ratings_for_stats(tmp_dir)
+
+        self.assertTrue(ratings.empty)
+        self.assertEqual(ratings.columns.tolist(), ["movieId", "rating"])
 
     def test_load_movies_restores_year_in_display_title_from_existing_clean_file(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
