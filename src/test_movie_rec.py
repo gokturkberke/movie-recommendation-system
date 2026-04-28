@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from data_access import load_movies, load_surprise_model
+from data_access import latest_release_info, load_movies, load_surprise_model
 from recommenders import (
     build_tfidf_matrix,
     pick_random_movie,
@@ -115,6 +115,40 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertNotIn("Toy Story", recommendations["title"].tolist())
         self.assertIn("Toy Story 2", recommendations["title"].tolist())
 
+    def test_movie_title_suggestions_handle_common_typo(self):
+        movies = pd.concat(
+            [
+                self.movies,
+                pd.DataFrame(
+                    [
+                        {
+                            "movieId": 5,
+                            "title": "Joker (2019)",
+                            "genres": "Crime|Drama|Thriller",
+                            "title_for_matching": "joker",
+                            "genres_for_matching": "crime drama thriller",
+                        },
+                        {
+                            "movieId": 6,
+                            "title": "OKA! (2011)",
+                            "genres": "Drama",
+                            "title_for_matching": "oka",
+                            "genres_for_matching": "drama",
+                        },
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+        from recommenders import suggest_movie_titles
+
+        suggestions = suggest_movie_titles("jokar", movies, limit=5)
+
+        self.assertFalse(suggestions.empty)
+        self.assertEqual(suggestions.iloc[0]["title"], "Joker (2019)")
+        self.assertNotIn("OKA! (2011)", suggestions["title"].tolist())
+
     def test_mood_recommendations_filter_to_mapped_genres(self):
         recommendations = recommend_by_mood("happy", self.movies, watched_titles=set(), top_n=2)
 
@@ -190,6 +224,21 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertEqual(movies["title"].tolist(), ["Sabrina (1954)", "Sabrina (1995)"])
         self.assertEqual(movies["title_display"].tolist(), ["Sabrina (1954)", "Sabrina (1995)"])
         self.assertEqual(movies["title_for_matching"].tolist(), ["sabrina", "sabrina"])
+
+    def test_latest_release_info_uses_release_year_from_titles(self):
+        movies = pd.DataFrame(
+            [
+                {"movieId": 1, "title": "Older Movie (1995)", "genres": "Drama"},
+                {"movieId": 2, "title": "New Movie (2019)", "genres": "Drama"},
+                {"movieId": 3, "title": "Another New Movie (2019)", "genres": "Comedy"},
+            ]
+        )
+
+        latest_year, latest_count, latest_movies = latest_release_info(movies)
+
+        self.assertEqual(latest_year, 2019)
+        self.assertEqual(latest_count, 2)
+        self.assertEqual(set(latest_movies["title"]), {"New Movie (2019)", "Another New Movie (2019)"})
 
     def test_tmdb_id_falls_back_to_links(self):
         row = pd.Series({"movieId": 3, "title": "Heat"})

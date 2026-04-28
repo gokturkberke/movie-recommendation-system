@@ -95,6 +95,71 @@ def find_movie_match(movie_title, movies_with_content):
     return None
 
 
+def title_match_score(query, candidate):
+    query = clean_text(query)
+    candidate = clean_text(candidate)
+    if not query or not candidate:
+        return 0
+
+    if query == candidate:
+        return 120
+    if candidate.startswith(query):
+        return 115
+    if query in candidate:
+        return 105
+
+    token_scores = []
+    for index, token in enumerate(candidate.split()):
+        if len(token) <= 1:
+            continue
+        token_score = fuzz.ratio(query, token)
+        if index > 0:
+            token_score = 105 if query == token else token_score - 15
+        token_scores.append(token_score)
+    token_score = max(token_scores) if token_scores else 0
+    full_score = fuzz.ratio(query, candidate)
+    token_set_score = fuzz.token_set_ratio(query, candidate) if " " in query else 0
+    return max(token_score, full_score, token_set_score)
+
+
+def suggest_movie_titles(query, movies, limit=8, min_score=78):
+    cleaned_query = clean_text(query)
+    if len(cleaned_query) < 2 or movies.empty:
+        return pd.DataFrame(columns=["movieId", "title", "genres", "match_score"])
+
+    suggestions = []
+    seen_movie_ids = set()
+    for _, row in movies.iterrows():
+        movie_id = row.get("movieId")
+        if movie_id in seen_movie_ids:
+            continue
+        candidate = row.get("title_for_matching") or row.get("title")
+        score = title_match_score(cleaned_query, candidate)
+        if score >= min_score:
+            title = row.get("title", "")
+            years = re.findall(r"\((\d{4})\)", str(title))
+            suggestions.append(
+                {
+                    "movieId": movie_id,
+                    "title": title,
+                    "genres": row.get("genres", ""),
+                    "match_score": score,
+                    "release_year": int(years[-1]) if years else 0,
+                }
+            )
+            seen_movie_ids.add(movie_id)
+
+    if not suggestions:
+        return pd.DataFrame(columns=["movieId", "title", "genres", "match_score"])
+
+    suggestions_df = pd.DataFrame(suggestions)
+    suggestions_df = suggestions_df.sort_values(
+        ["match_score", "release_year", "title"],
+        ascending=[False, False, True],
+    )
+    return suggestions_df.head(limit).reset_index(drop=True)
+
+
 def recommend_similar_movies(
     movie_title,
     movies_with_content,

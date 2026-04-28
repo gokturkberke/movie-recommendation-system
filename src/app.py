@@ -3,6 +3,7 @@ import streamlit as st
 
 from config import DEMO_PROFILES_WITH_GENRES, MENU_ITEMS, MOOD_GENRE_MAP, get_tmdb_api_key
 from data_access import (
+    latest_release_info,
     load_links,
     load_movies,
     load_ratings,
@@ -18,6 +19,7 @@ from recommenders import (
     recommend_for_persona,
     recommend_for_user,
     recommend_similar_movies,
+    suggest_movie_titles,
 )
 from tmdb_client import get_movie_details, get_tmdb_id
 
@@ -129,15 +131,34 @@ def render_content_based_page(context):
         return
 
     movie_title = st.text_input("Enter a movie title you like:", key="content_movie_title")
+    selected_title = None
+    suggestions = suggest_movie_titles(movie_title, context["movies"], limit=8)
+    if not suggestions.empty:
+        option_labels = [
+            f"{row.title} — {row.genres}"
+            for row in suggestions.itertuples(index=False)
+        ]
+        selected_label = st.selectbox(
+            "Closest matches in your dataset:",
+            options=["Select a match..."] + option_labels,
+            key="content_movie_suggestion",
+        )
+        if selected_label != "Select a match...":
+            selected_index = option_labels.index(selected_label)
+            selected_title = suggestions.iloc[selected_index]["title"]
+        else:
+            st.caption("Select one of these if your typed title is misspelled or ambiguous.")
+
     if not st.button("Get Recommendations", key="content_get_recommendations"):
         return
 
-    if not movie_title.strip():
+    title_to_recommend = selected_title or movie_title
+    if not str(title_to_recommend).strip():
         st.warning("Please enter a movie title.")
         return
 
     recommendations, matched_title = recommend_similar_movies(
-        movie_title,
+        title_to_recommend,
         context["movies_with_content"],
         context["tfidf_matrix"],
         context["movies"],
@@ -325,8 +346,9 @@ def render_watch_history_page(context):
     render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
 
 
-def render_about_page():
+def render_about_page(context):
     st.success("**About & Help**")
+    latest_year, latest_count, latest_movies = latest_release_info(context["movies"])
     st.markdown(
         """
         ### Recommendation methods
@@ -345,6 +367,12 @@ def render_about_page():
         Poster and overview rendering requires `TMDB_API_KEY` from the environment or Streamlit secrets.
         """
     )
+    if latest_year:
+        st.info(f"Loaded dataset latest release year: **{latest_year}** ({latest_count} movies).")
+        st.dataframe(
+            latest_movies[["title", "genres"]].head(10).reset_index(drop=True),
+            use_container_width=True,
+        )
 
 
 def load_context():
@@ -395,7 +423,7 @@ def main():
     elif choice == MENU_ITEMS[4]:
         render_watch_history_page(context)
     elif choice == MENU_ITEMS[5]:
-        render_about_page()
+        render_about_page(context)
 
     st.sidebar.markdown("---")
     st.sidebar.info(APP_VERSION)

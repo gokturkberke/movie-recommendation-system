@@ -80,6 +80,27 @@ def merge_tmdb_ids(movies, links):
     return movies.merge(links[["movieId", "tmdbId"]], on="movieId", how="left")
 
 
+def release_years(movies):
+    if movies.empty:
+        return pd.Series(dtype="Int64")
+
+    title_source = movies["title_original"] if "title_original" in movies.columns else movies["title"]
+    extracted = title_source.fillna("").astype(str).str.findall(r"\((\d{4})\)")
+    return extracted.apply(lambda values: int(values[-1]) if values else pd.NA).astype("Int64")
+
+
+def latest_release_info(movies):
+    years = release_years(movies)
+    valid_years = years.dropna()
+    if valid_years.empty:
+        return None, 0, pd.DataFrame()
+
+    latest_year = int(valid_years.max())
+    latest_movies = movies[years == latest_year].copy()
+    latest_movies["release_year"] = latest_year
+    return latest_year, len(latest_movies), latest_movies
+
+
 def load_surprise_model(model_path=SVD_MODEL_PATH):
     model_path = Path(model_path)
     if not model_path.exists():
