@@ -143,23 +143,29 @@ def render_content_based_page(context):
     movie_title = st.text_input("Enter a movie title you like:", key="content_movie_title")
     selected_movie_id = None
     selected_title = None
+    needs_disambiguation = False
     suggestions = suggest_movie_titles(movie_title, context["movies"], limit=8)
     if not suggestions.empty:
         option_lookup = {
             index: f"{row.title} — {row.genres}"
             for index, row in suggestions.iterrows()
         }
-        selected_index = st.selectbox(
-            "Closest matches in your dataset:",
-            options=[None] + list(option_lookup.keys()),
-            format_func=lambda value: "Select a match..." if value is None else option_lookup[value],
-            key="content_movie_suggestion",
-        )
-        if selected_index is not None:
-            selected_movie_id = suggestions.loc[selected_index, "movieId"]
-            selected_title = suggestions.loc[selected_index, "title"]
+        if len(suggestions) == 1:
+            selected_movie_id = suggestions.iloc[0]["movieId"]
+            selected_title = suggestions.iloc[0]["title"]
+            st.caption(f"Matched movie: {selected_title}")
         else:
-            st.caption("Select one of these if your typed title is misspelled or ambiguous.")
+            needs_disambiguation = True
+            st.caption("Found multiple matching movies. Select the exact movie before requesting recommendations.")
+            selected_index = st.selectbox(
+                "Please select one:",
+                options=[None] + list(option_lookup.keys()),
+                format_func=lambda value: "Select a match..." if value is None else option_lookup[value],
+                key="content_movie_suggestion",
+            )
+            if selected_index is not None:
+                selected_movie_id = suggestions.loc[selected_index, "movieId"]
+                selected_title = suggestions.loc[selected_index, "title"]
 
     if not st.button("Get Recommendations", key="content_get_recommendations"):
         return
@@ -167,6 +173,9 @@ def render_content_based_page(context):
     title_to_recommend = selected_title or movie_title
     if not str(title_to_recommend).strip():
         st.warning("Please enter a movie title.")
+        return
+    if needs_disambiguation and selected_movie_id is None:
+        st.warning("Multiple movies match this title. Please select one from the list.")
         return
 
     movie_stats = cached_movie_stats()

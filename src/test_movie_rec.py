@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
 from recommenders import (
+    aggregate_watch_history_candidates,
     build_movie_stats,
     build_tfidf_matrix,
+    find_movie_match,
     pick_random_movie,
     recommend_based_on_watch_history_content,
     recommend_by_mood,
@@ -263,6 +265,74 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertEqual(reranked.iloc[0]["movieId"], 3)
         self.assertIn("final_score", reranked.columns)
         self.assertGreater(reranked.iloc[0]["final_score"], reranked.iloc[1]["final_score"])
+
+    def test_watch_history_aggregation_rewards_multiple_seed_matches(self):
+        candidate_frames = [
+            pd.DataFrame(
+                [
+                    {
+                        "movieId": 10,
+                        "title": "One Strong Seed",
+                        "genres": "Drama",
+                        "similarity_score": 0.80,
+                        "final_score": 0.80,
+                        "seed_movie_id": 1,
+                    },
+                    {
+                        "movieId": 11,
+                        "title": "Broad Match",
+                        "genres": "Drama",
+                        "similarity_score": 0.60,
+                        "final_score": 0.60,
+                        "seed_movie_id": 1,
+                    },
+                ]
+            ),
+            pd.DataFrame(
+                [
+                    {
+                        "movieId": 11,
+                        "title": "Broad Match",
+                        "genres": "Drama",
+                        "similarity_score": 0.62,
+                        "final_score": 0.62,
+                        "seed_movie_id": 2,
+                    },
+                ]
+            ),
+            pd.DataFrame(
+                [
+                    {
+                        "movieId": 11,
+                        "title": "Broad Match",
+                        "genres": "Drama",
+                        "similarity_score": 0.65,
+                        "final_score": 0.65,
+                        "seed_movie_id": 3,
+                    },
+                ]
+            ),
+        ]
+
+        aggregated = aggregate_watch_history_candidates(candidate_frames)
+        scores = aggregated.set_index("movieId")["watch_history_score"]
+
+        self.assertGreater(scores.loc[11], scores.loc[10])
+        self.assertEqual(aggregated.set_index("movieId").loc[11, "matched_seed_count"], 3)
+        self.assertEqual(aggregated.set_index("movieId").loc[11, "similarity_score"], scores.loc[11])
+
+    def test_title_matching_prefers_exact_match_before_contains(self):
+        movies = pd.DataFrame(
+            [
+                {"movieId": 1, "title": "Batman Returns (1992)", "title_for_matching": "batman returns"},
+                {"movieId": 2, "title": "Batman (1989)", "title_for_matching": "batman"},
+                {"movieId": 3, "title": "The Batman (2022)", "title_for_matching": "the batman"},
+            ]
+        )
+
+        match_index = find_movie_match("Batman", movies)
+
+        self.assertEqual(movies.loc[match_index, "movieId"], 2)
 
     def test_watch_history_recommendations_are_unique_and_unwatched(self):
         recommendations = recommend_based_on_watch_history_content(

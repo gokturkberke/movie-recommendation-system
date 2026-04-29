@@ -19,12 +19,21 @@ HYBRID_SCORE_COLUMNS = [
     "rating_count",
     "popularity_score",
     "diversity_bonus",
+    "watch_history_score",
+    "max_similarity_score",
+    "mean_similarity_score",
+    "matched_seed_count",
 ]
 HYBRID_WEIGHTS = {
     "content_similarity": 0.60,
     "bayesian_rating": 0.25,
     "popularity": 0.10,
     "diversity": 0.05,
+}
+WATCH_HISTORY_WEIGHTS = {
+    "max_similarity": 0.70,
+    "mean_similarity": 0.20,
+    "matched_seed_count_bonus": 0.10,
 }
 
 
@@ -268,6 +277,10 @@ def find_movie_match(movie_title, movies_with_content):
         return None
 
     titles = movies_with_content["title_for_matching"].fillna("").astype(str)
+    exact_matches = movies_with_content[titles == cleaned_movie_title]
+    if not exact_matches.empty:
+        return exact_matches.index[0]
+
     contains_matches = movies_with_content[titles.str.contains(cleaned_movie_title, na=False, regex=False)]
     if not contains_matches.empty:
         return contains_matches.index[0]
@@ -511,6 +524,52 @@ def recommend_by_watched_genres(watched_movie_ids, movies, top_n=10):
     return ensure_output_columns(recommendations, movies).head(top_n).reset_index(drop=True)
 
 
+def aggregate_watch_history_candidates(candidate_frames):
+    if not candidate_frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(candidate_frames, ignore_index=True)
+    if combined.empty or "movieId" not in combined.columns:
+        return combined
+
+    combined["similarity_score"] = numeric_series(combined, "similarity_score", 0.0)
+    if "seed_movie_id" not in combined.columns:
+        combined["seed_movie_id"] = combined.index
+
+    sort_columns = [column for column in ["final_score", "similarity_score"] if column in combined.columns]
+    if sort_columns:
+        representatives = combined.sort_values(sort_columns, ascending=[False] * len(sort_columns))
+    else:
+        representatives = combined.copy()
+    representatives = representatives.drop_duplicates(subset=["movieId"], keep="first")
+
+    aggregated_scores = (
+        combined.groupby("movieId")
+        .agg(
+            max_similarity_score=("similarity_score", "max"),
+            mean_similarity_score=("similarity_score", "mean"),
+            matched_seed_count=("seed_movie_id", "nunique"),
+        )
+        .reset_index()
+    )
+    aggregated_scores["watch_history_score"] = (
+        WATCH_HISTORY_WEIGHTS["max_similarity"] * aggregated_scores["max_similarity_score"]
+        + WATCH_HISTORY_WEIGHTS["mean_similarity"] * aggregated_scores["mean_similarity_score"]
+        + WATCH_HISTORY_WEIGHTS["matched_seed_count_bonus"] * aggregated_scores["matched_seed_count"]
+    )
+
+    score_columns = [
+        "watch_history_score",
+        "max_similarity_score",
+        "mean_similarity_score",
+        "matched_seed_count",
+    ]
+    representatives = representatives.drop(columns=score_columns, errors="ignore")
+    aggregated = representatives.merge(aggregated_scores, on="movieId", how="left")
+    aggregated["similarity_score"] = aggregated["watch_history_score"]
+    return aggregated.drop(columns=["seed_movie_id"], errors="ignore")
+
+
 def recommend_based_on_watch_history_content(
     watched_movie_ids,
     movies_with_content,
@@ -520,8 +579,9 @@ def recommend_based_on_watch_history_content(
     top_n=10,
 ):
     watched_ids = normalize_movie_ids(watched_movie_ids)
+    columns = output_columns(movies)
     if not watched_ids:
-        return pd.DataFrame(columns=output_columns(movies))
+        return pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)
 
     recommendation_frames = []
     for seed_movie_id in watched_ids:
@@ -532,18 +592,18 @@ def recommend_based_on_watch_history_content(
             movies,
             watched_movie_ids=watched_ids,
             movie_stats=movie_stats,
-            top_n=top_n + 5,
+            top_n=CONTENT_CANDIDATE_POOL_SIZE,
             internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
         )
         if matched_title and not seed_recommendations.empty:
+            seed_recommendations = seed_recommendations.copy()
+            seed_recommendations["seed_movie_id"] = seed_movie_id
             recommendation_frames.append(seed_recommendations)
 
     if not recommendation_frames:
-        return pd.DataFrame(columns=output_columns(movies))
+        return pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)
 
-    combined = pd.concat(recommendation_frames)
-    combined = combined.sort_values("final_score", ascending=False)
-    combined = combined.drop_duplicates(subset=["movieId"], keep="first")
+    combined = aggregate_watch_history_candidates(recommendation_frames)
     combined = filter_watched_movies(combined, watched_ids)
     combined = rerank_hybrid_candidates(combined, movie_stats=movie_stats, top_n=top_n)
     return ensure_output_columns(combined, movies, HYBRID_SCORE_COLUMNS).head(top_n).reset_index(drop=True)
