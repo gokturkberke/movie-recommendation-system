@@ -8,6 +8,17 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
+from evaluation import (
+    popularity_recommendations,
+    rating_prediction_metrics,
+    temporal_train_test_split,
+    top_n_metrics,
+)
+from evaluate_baselines import (
+    build_svd_holdout_predictions,
+    parse_k_values,
+    select_evaluation_user_ids,
+)
 from recommenders import (
     aggregate_watch_history_candidates,
     build_movie_stats,
@@ -105,6 +116,157 @@ class TestMovieRecommendations(unittest.TestCase):
             self.movies.copy(),
             self.tags.copy(),
         )
+
+    def test_temporal_holdout_uses_latest_interactions_per_user(self):
+        ratings = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 10, "rating": 3.0, "timestamp": 100},
+                {"userId": 1, "movieId": 11, "rating": 4.0, "timestamp": 200},
+                {"userId": 1, "movieId": 12, "rating": 5.0, "timestamp": 300},
+                {"userId": 2, "movieId": 20, "rating": 4.0, "timestamp": 100},
+                {"userId": 3, "movieId": 30, "rating": 4.0, "timestamp": 100},
+                {"userId": 3, "movieId": 31, "rating": 5.0, "timestamp": 200},
+            ]
+        )
+
+        train, holdout = temporal_train_test_split(ratings, holdout_count=1, min_interactions=2)
+
+        self.assertEqual(holdout[["userId", "movieId"]].values.tolist(), [[1, 12], [3, 31]])
+        self.assertIn(20, train["movieId"].tolist())
+        self.assertNotIn(12, train["movieId"].tolist())
+        self.assertNotIn(31, train["movieId"].tolist())
+
+    def test_rating_prediction_metrics_compute_rmse_and_mae(self):
+        predictions = pd.DataFrame(
+            [
+                {"actual_rating": 5.0, "predicted_rating": 4.0},
+                {"actual_rating": 3.0, "predicted_rating": 3.0},
+            ]
+        )
+
+        metrics = rating_prediction_metrics(predictions)
+
+        self.assertAlmostEqual(metrics["rmse"], 0.70710678)
+        self.assertAlmostEqual(metrics["mae"], 0.5)
+        self.assertEqual(metrics["count"], 2)
+
+    def test_popularity_recommendations_exclude_seen_train_items(self):
+        train = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 1, "rating": 5.0},
+                {"userId": 1, "movieId": 2, "rating": 4.0},
+                {"userId": 2, "movieId": 2, "rating": 5.0},
+                {"userId": 2, "movieId": 3, "rating": 4.0},
+                {"userId": 3, "movieId": 2, "rating": 4.5},
+            ]
+        )
+        candidates = pd.DataFrame({"movieId": [1, 2, 3, 4]})
+
+        recommendations = popularity_recommendations(train, candidates, user_ids=[1], k=2)
+
+        self.assertEqual(recommendations["movieId"].tolist(), [3, 4])
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+        self.assertNotIn(2, recommendations["movieId"].tolist())
+
+    def test_top_n_metrics_compute_relevance_and_catalog_diagnostics(self):
+        train = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 1, "rating": 5.0},
+                {"userId": 2, "movieId": 2, "rating": 4.0},
+                {"userId": 3, "movieId": 2, "rating": 4.5},
+            ]
+        )
+        holdout = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 2, "rating": 5.0},
+                {"userId": 2, "movieId": 4, "rating": 4.0},
+            ]
+        )
+        recommendations = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 2},
+                {"userId": 1, "movieId": 3},
+                {"userId": 2, "movieId": 4},
+                {"userId": 2, "movieId": 2},
+            ]
+        )
+        baseline = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 2},
+                {"userId": 1, "movieId": 3},
+                {"userId": 2, "movieId": 5},
+                {"userId": 2, "movieId": 2},
+            ]
+        )
+        movies = pd.DataFrame(
+            [
+                {"movieId": 1, "genres": "Comedy"},
+                {"movieId": 2, "genres": "Comedy"},
+                {"movieId": 3, "genres": "Drama"},
+                {"movieId": 4, "genres": "Action"},
+                {"movieId": 5, "genres": "Thriller"},
+            ]
+        )
+
+        metrics = top_n_metrics(
+            recommendations,
+            holdout,
+            train=train,
+            movies=movies,
+            baseline_recommendations=baseline,
+            k=2,
+        )
+
+        self.assertAlmostEqual(metrics["precision_at_k"], 0.5)
+        self.assertAlmostEqual(metrics["recall_at_k"], 1.0)
+        self.assertAlmostEqual(metrics["ndcg_at_k"], 1.0)
+        self.assertAlmostEqual(metrics["hit_rate_at_k"], 1.0)
+        self.assertAlmostEqual(metrics["catalog_coverage"], 0.6)
+        self.assertAlmostEqual(metrics["user_coverage"], 1.0)
+        self.assertAlmostEqual(metrics["diversity"], 1.0)
+        self.assertGreater(metrics["novelty"], 0.0)
+        self.assertAlmostEqual(metrics["serendipity"], 0.5)
+        self.assertEqual(metrics["evaluated_user_count"], 2)
+        self.assertEqual(metrics["recommended_item_count"], 3)
+
+    def test_evaluation_runner_parses_unique_positive_k_values(self):
+        self.assertEqual(parse_k_values("10, 5, 10"), [5, 10])
+        with self.assertRaises(ValueError):
+            parse_k_values("0")
+
+    def test_evaluation_runner_selects_bounded_eligible_users(self):
+        ratings = pd.DataFrame(
+            [
+                {"userId": 3, "movieId": 1},
+                {"userId": 3, "movieId": 2},
+                {"userId": 1, "movieId": 1},
+                {"userId": 1, "movieId": 2},
+                {"userId": 1, "movieId": 3},
+                {"userId": 2, "movieId": 1},
+            ]
+        )
+
+        user_ids = select_evaluation_user_ids(
+            ratings,
+            max_users=1,
+            min_interactions=2,
+            holdout_count=1,
+        )
+
+        self.assertEqual(user_ids, [1])
+
+    def test_svd_holdout_predictions_use_supplied_model(self):
+        holdout = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 2, "rating": 5.0},
+                {"userId": 1, "movieId": 4, "rating": 3.0},
+            ]
+        )
+
+        predictions = build_svd_holdout_predictions(FakeSvdModel(), holdout)
+
+        self.assertEqual(predictions["predicted_rating"].tolist(), [4.9, 4.5])
+        self.assertEqual(predictions["actual_rating"].tolist(), [5.0, 3.0])
 
     def test_content_based_fuzzy_match_and_watched_exclusion(self):
         recommendations, matched_title = recommend_similar_movies(
