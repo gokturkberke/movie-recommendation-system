@@ -20,10 +20,13 @@ from evaluate_baselines import (
     select_evaluation_user_ids,
 )
 from recommenders import (
+    HYBRID_SCORE_COLUMNS,
     aggregate_watch_history_candidates,
     build_movie_stats,
     build_tfidf_matrix,
+    explain_hybrid_recommendation,
     find_movie_match,
+    hybrid_signal_contributions,
     pick_random_movie,
     recommend_based_on_watch_history_content,
     recommend_by_mood,
@@ -427,6 +430,90 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertEqual(reranked.iloc[0]["movieId"], 3)
         self.assertIn("final_score", reranked.columns)
         self.assertGreater(reranked.iloc[0]["final_score"], reranked.iloc[1]["final_score"])
+
+    def test_hybrid_signal_contributions_explain_final_score(self):
+        candidates = pd.DataFrame(
+            [
+                {"movieId": 3, "title": "Trusted Similar", "genres": "Drama", "similarity_score": 0.76},
+            ]
+        )
+        movie_stats = pd.DataFrame(
+            [
+                {
+                    "movieId": 3,
+                    "bayesian_rating": 4.6,
+                    "bayesian_rating_normalized": 0.92,
+                    "rating_count": 500,
+                    "popularity_score": 1.00,
+                },
+            ]
+        )
+
+        reranked = rerank_hybrid_candidates(candidates, movie_stats=movie_stats, top_n=1)
+        row = reranked.iloc[0]
+        contributions = hybrid_signal_contributions(row)
+        reason = explain_hybrid_recommendation(row)
+
+        self.assertAlmostEqual(sum(contributions.values()), row["final_score"])
+        self.assertEqual(
+            set(contributions),
+            {"content_similarity", "bayesian_rating", "popularity", "diversity"},
+        )
+        self.assertIn("strong content similarity", reason)
+        self.assertIn("high Bayesian rating", reason)
+
+    def test_hybrid_reranking_without_stats_uses_similarity_only(self):
+        candidates = pd.DataFrame(
+            [
+                {
+                    "movieId": 2,
+                    "title": "Lower Similarity",
+                    "genres": "Drama",
+                    "similarity_score": 0.40,
+                    "final_score": 99.0,
+                    "diversity_bonus": 99.0,
+                },
+                {
+                    "movieId": 3,
+                    "title": "Higher Similarity",
+                    "genres": "Action",
+                    "similarity_score": 0.90,
+                    "final_score": 0.0,
+                    "diversity_bonus": 0.0,
+                },
+            ]
+        )
+
+        reranked = rerank_hybrid_candidates(candidates, movie_stats=None, top_n=2)
+
+        self.assertEqual(reranked["movieId"].tolist(), [3, 2])
+        self.assertEqual(reranked["final_score"].tolist(), [0.90, 0.40])
+        self.assertEqual(reranked["popularity_score"].tolist(), [0.0, 0.0])
+        self.assertEqual(reranked["diversity_bonus"].tolist(), [0.0, 0.0])
+        self.assertTrue(reranked["bayesian_rating"].isna().all())
+
+    def test_hybrid_explainability_does_not_expand_default_content_output(self):
+        ratings = pd.DataFrame(
+            [
+                {"movieId": 1, "rating": 5.0},
+                {"movieId": 2, "rating": 4.0},
+                {"movieId": 2, "rating": 4.0},
+                {"movieId": 3, "rating": 4.5},
+            ]
+        )
+
+        recommendations, _ = recommend_similar_movies_by_id(
+            1,
+            self.movies_with_content,
+            self.tfidf_matrix,
+            self.movies,
+            watched_movie_ids={1},
+            movie_stats=build_movie_stats(ratings, min_rating_count=1),
+            top_n=2,
+        )
+
+        self.assertEqual(recommendations.columns.tolist(), ["movieId", "title", "genres", "tmdbId"] + HYBRID_SCORE_COLUMNS)
+        self.assertNotIn("recommendation_reason", recommendations.columns)
 
     def test_watch_history_aggregation_rewards_multiple_seed_matches(self):
         candidate_frames = [
