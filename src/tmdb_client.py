@@ -1,6 +1,8 @@
 import requests
 import pandas as pd
 
+from config import TMDB_TIMEOUT
+
 
 def get_tmdb_id(row, links_df=None):
     if "tmdbId" in row and pd.notna(row["tmdbId"]):
@@ -15,7 +17,7 @@ def get_tmdb_id(row, links_df=None):
     return int(link_info.iloc[0]["tmdbId"])
 
 
-def get_movie_details(tmdb_id, api_key, timeout=8):
+def get_movie_details(tmdb_id, api_key, timeout=TMDB_TIMEOUT):
     if not api_key or pd.isna(tmdb_id):
         return None
 

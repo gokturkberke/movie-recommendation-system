@@ -6,12 +6,17 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from thefuzz import fuzz
 
-from config import INITIAL_CANDIDATE_POOL_SIZE, MOOD_GENRE_MAP
+from config import (
+    BAYESIAN_MIN_RATINGS,
+    CONTENT_CANDIDATE_POOL_SIZE,
+    HYBRID_WEIGHTS,
+    INITIAL_CANDIDATE_POOL_SIZE,
+    MOOD_GENRE_MAP,
+    WATCH_HISTORY_WEIGHTS,
+)
 
 
 BASE_OUTPUT_COLUMNS = ["movieId", "title", "genres"]
-CONTENT_CANDIDATE_POOL_SIZE = 100
-BAYESIAN_MIN_RATINGS = 100
 HYBRID_SCORE_COLUMNS = [
     "similarity_score",
     "final_score",
@@ -24,19 +29,6 @@ HYBRID_SCORE_COLUMNS = [
     "mean_similarity_score",
     "matched_seed_count",
 ]
-HYBRID_WEIGHTS = {
-    "content_similarity": 0.60,
-    "bayesian_rating": 0.25,
-    "popularity": 0.10,
-    "diversity": 0.05,
-}
-WATCH_HISTORY_WEIGHTS = {
-    "max_similarity": 0.70,
-    "mean_similarity": 0.20,
-    "matched_seed_count_bonus": 0.10,
-}
-
-
 def clean_text(text):
     if pd.isna(text):
         return ""

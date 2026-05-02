@@ -1,0 +1,89 @@
+paths:
+  data_dir: data
+  cleaned_data_dir: cleaned_data
+  svd_model_path: cleaned_data/svd_trained_model.pkl
+
+recommendations:
+  initial_candidate_pool_size: 300
+  content_candidate_pool_size: 100
+  bayesian_min_ratings: 100
+  hybrid_weights:
+    content_similarity: 0.60
+    bayesian_rating: 0.25
+    popularity: 0.10
+    diversity: 0.05
+  watch_history_weights:
+    max_similarity: 0.70
+    mean_similarity: 0.20
+    matched_seed_count_bonus: 0.10
+
+mood_genre_map:
+  happy:
+    - Comedy
+    - Family
+    - Animation
+    - Romance
+  sad:
+    - Drama
+    - Romance
+  adventurous:
+    - Action
+    - Adventure
+    - Thriller
+  scared:
+    - Horror
+    - Thriller
+    - Mystery
+  excited:
+    - Action
+    - Adventure
+    - Sci-Fi
+  nostalgic:
+    - Animation
+    - Family
+    - Fantasy
+  thoughtful:
+    - Documentary
+    - Drama
+  surprised:
+    - Mystery
+    - Thriller
+
+tmdb:
+  timeout_seconds: 8
+
+ui:
+  menu_items:
+    - "\U0001F3AF Content-Based Recommendation"
+    - "\U0001F465 Collaborative Filtering"
+    - "\U0001F60A Mood-Based Recommendation"
+    - "\U0001F3B2 Random Movie"
+    - "\U0001F39E\U0000FE0F Watch History & Recommendations"
+    - "\U00002139\U0000FE0F About & Help"
+  demo_profiles:
+    "Select a Demo Profile...":
+      id:
+      target_genre_cols: []
+    "\U0001F3AC Comedy Fan":
+      id: 88539
+      target_genre_cols:
+        - genre_comedy
+    "\U0001F4A5 Action & Thriller Seeker":
+      id: 129440
+      target_genre_cols:
+        - genre_action
+        - genre_thriller
+    "\U0001F3AD Drama Enthusiast":
+      id: 110971
+      target_genre_cols:
+        - genre_drama
+    "\U0001F52E Sci-Fi & Fantasy Voyager":
+      id: 78616
+      target_genre_cols:
+        - genre_scifi
+        - genre_fantasy
+    "\U0001F9F8 Animation & Family Watcher":
+      id: 93359
+      target_genre_cols:
+        - genre_animation
+        - genre_children
