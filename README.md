@@ -1,6 +1,6 @@
 # 🎬 Advanced Movie Recommendation System
 
-This project is a comprehensive movie recommendation system that suggests personalized movie recommendations to users, utilizing the MovieLens 25M dataset. The system incorporates core data science methods such as data preprocessing, exploratory data analysis, and the implementation of various recommendation algorithms (content-based, collaborative filtering, mood-based, etc.). To enhance user interaction and experience, it features interactive elements and TMDB API integration for displaying movie posters and summaries.
+This project is a comprehensive movie recommendation system that suggests personalized movie recommendations to users, utilizing the MovieLens latest (ml-latest) dataset. The system incorporates core data science methods such as data preprocessing, exploratory data analysis, and the implementation of various recommendation algorithms (content-based, collaborative filtering, mood-based, etc.). To enhance user interaction and experience, it features interactive elements and TMDB API integration for displaying movie posters and summaries.
 
 ## 🌟 Core Features
 
@@ -15,7 +15,9 @@ This project is a comprehensive movie recommendation system that suggests person
     * Allows users to manage their watch history (add movies).
     * Displays recommended movies with their titles, genres, posters, and summaries fetched from TMDB.
 * **Data Management and Preprocessing:**
-    * Comprehensive cleaning and preprocessing of the MovieLens 25M dataset (`movies.csv`, `ratings.csv`, `tags.csv`, `links.csv`).
+    * Comprehensive cleaning and preprocessing of the MovieLens latest (ml-latest) dataset (`movies.csv`, `ratings.csv`, `tags.csv`, `links.csv`).
+    * Cleaned dataset snapshot: 79,477 movies, 33,703,215 ratings, and 2,328,298 tags.
+    * Latest release year in the cleaned movies: 2023, with 553 movies.
     * TF-IDF vectorization for textual data.
     * Saving and reloading of the trained model and processed data.
 * **TMDB API Integration:**
@@ -33,7 +35,7 @@ This project is a comprehensive movie recommendation system that suggests person
 * **API Interaction:** Requests
 * **Configuration:** YAML through `config/config.yaml`
 * **Data Visualization (During Analysis Phase):** Matplotlib, Seaborn
-* **Dataset:** [MovieLens 25M Dataset](https://grouplens.org/datasets/movielens/25m/)
+* **Dataset:** [MovieLens Latest Dataset (ml-latest)](https://grouplens.org/datasets/movielens/latest/)
 
 1.  **Clone the Repository:**
     ```bash
@@ -53,7 +55,7 @@ This project is a comprehensive movie recommendation system that suggests person
     pip install -r requirements.txt
     ```
 3.  **Download the Dataset:**
-    * Download the [MovieLens 25M Dataset](https://grouplens.org/datasets/movielens/25m/) (`ml-25m.zip`).
+    * Download the [MovieLens Latest Dataset](https://grouplens.org/datasets/movielens/latest/) (`ml-latest.zip`).
     * Extract the ZIP file and copy `links.csv`, `movies.csv`, `ratings.csv`, and `tags.csv` into the `data/` folder of your project.
 
 4.  **Set Up Your TMDB API Key:**
