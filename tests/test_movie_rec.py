@@ -7,6 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from config import CONFIG_PATH, CONTENT_CANDIDATE_POOL_SIZE, MENU_ITEMS, SVD_MODEL_PATH, TMDB_TIMEOUT
 from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
 from evaluation import (
     popularity_recommendations,
@@ -120,6 +121,13 @@ class TestMovieRecommendations(unittest.TestCase):
             self.movies.copy(),
             self.tags.copy(),
         )
+
+    def test_runtime_config_uses_yaml_backed_defaults(self):
+        self.assertTrue(CONFIG_PATH.exists())
+        self.assertEqual(CONTENT_CANDIDATE_POOL_SIZE, 100)
+        self.assertEqual(TMDB_TIMEOUT, 8)
+        self.assertEqual(SVD_MODEL_PATH.name, "svd_trained_model.pkl")
+        self.assertIn("Content-Based Recommendation", MENU_ITEMS[0])
 
     def test_temporal_holdout_uses_latest_interactions_per_user(self):
         ratings = pd.DataFrame(

@@ -31,6 +31,7 @@ This project is a comprehensive movie recommendation system that suggests person
 * **Text Similarity:** TheFuzz (FuzzyWuzzy)
 * **Web Interface:** Streamlit
 * **API Interaction:** Requests
+* **Configuration:** YAML through `config/config.yaml`
 * **Data Visualization (During Analysis Phase):** Matplotlib, Seaborn
 * **Dataset:** [MovieLens 25M Dataset](https://grouplens.org/datasets/movielens/25m/)
 
@@ -66,13 +67,13 @@ This project is a comprehensive movie recommendation system that suggests person
 5.  **Run the Data Preprocessing Script:**
     This script will clean the raw data and save it to the `cleaned_data/` folder.
     ```bash
-    python src/preprocess_dataset.py
+    .venv/bin/python scripts/preprocess_dataset.py
     ```
 
 6.  **Train the Recommendation Model:**
     This script will train the SVD model and save it as `cleaned_data/svd_trained_model.pkl`.
     ```bash
-    python src/train_save_model.py
+    .venv/bin/python scripts/train_save_model.py
     ```
 
 7.  **Launch the Streamlit Application:**
@@ -80,6 +81,18 @@ This project is a comprehensive movie recommendation system that suggests person
     .venv/bin/streamlit run src/app.py
     ```
     The application will typically open in your web browser at `http://localhost:8501`.
+
+## Project Layout
+
+* `src/`: Core Streamlit app, data access, TMDB client, recommendation logic, and evaluation helpers.
+* `scripts/`: Command-line orchestrators that call core functions from `src/`.
+* `tests/`: Unit and smoke tests.
+* `config/config.yaml`: Runtime parameters such as paths, candidate pool sizes, hybrid weights, mood mappings, menu labels, and demo profiles.
+
+To run a small offline baseline evaluation:
+```bash
+.venv/bin/python scripts/evaluate_baselines.py --max-users 5 --k 5 --example-count 1
+```
 
 ## 📖 Usage
 
@@ -99,4 +112,10 @@ Once the application is running:
 
 Unit tests are available for some core functions of the project. To run them:
 ```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+The legacy wrapper command is still supported:
+```bash
 .venv/bin/python -m unittest src/test_movie_rec.py
+```
