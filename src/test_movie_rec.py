@@ -17,6 +17,7 @@ from evaluation import (
 from evaluate_baselines import (
     build_svd_holdout_predictions,
     parse_k_values,
+    recommendation_examples,
     select_evaluation_user_ids,
 )
 from recommenders import (
@@ -271,6 +272,47 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertEqual(predictions["predicted_rating"].tolist(), [4.9, 4.5])
         self.assertEqual(predictions["actual_rating"].tolist(), [5.0, 3.0])
 
+    def test_evaluation_examples_join_titles_and_opt_in_reasons(self):
+        recommendations = pd.DataFrame(
+            [
+                {
+                    "userId": 1,
+                    "movieId": 3,
+                    "similarity_score": 0.76,
+                    "final_score": 0.836,
+                    "bayesian_rating": 4.6,
+                    "bayesian_rating_normalized": 0.92,
+                    "rating_count": 500,
+                    "popularity_score": 1.0,
+                    "diversity_bonus": 1.0,
+                }
+            ]
+        )
+        movies = pd.DataFrame(
+            [
+                {"movieId": 3, "title": "Heat", "genres": "Action|Crime|Thriller"},
+            ]
+        )
+
+        examples = recommendation_examples(
+            recommendations,
+            movies=movies,
+            limit=1,
+            include_reasons=True,
+        )
+        default_examples = recommendation_examples(
+            recommendations,
+            movies=movies,
+            limit=1,
+            include_reasons=False,
+        )
+
+        self.assertEqual(examples[0]["title"], "Heat")
+        self.assertIn("strong content similarity", examples[0]["reason"])
+        self.assertIn("score_contributions", examples[0])
+        self.assertIn("content_similarity", examples[0]["score_contributions"])
+        self.assertNotIn("reason", default_examples[0])
+
     def test_content_based_fuzzy_match_and_watched_exclusion(self):
         recommendations, matched_title = recommend_similar_movies(
             "toy storie",
@@ -461,6 +503,22 @@ class TestMovieRecommendations(unittest.TestCase):
         )
         self.assertIn("strong content similarity", reason)
         self.assertIn("high Bayesian rating", reason)
+
+    def test_hybrid_signal_contributions_preserve_watch_history_score_scale(self):
+        row = pd.Series(
+            {
+                "similarity_score": 1.25,
+                "bayesian_rating_normalized": 0.0,
+                "popularity_score": 0.0,
+                "diversity_bonus": 1.0,
+                "final_score": 0.80,
+            }
+        )
+
+        contributions = hybrid_signal_contributions(row)
+
+        self.assertAlmostEqual(sum(contributions.values()), row["final_score"])
+        self.assertGreater(contributions["content_similarity"], 0.60)
 
     def test_hybrid_reranking_without_stats_uses_similarity_only(self):
         candidates = pd.DataFrame(

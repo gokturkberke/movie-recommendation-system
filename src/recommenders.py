@@ -103,6 +103,12 @@ def clamp_score(value, default=0.0):
     return min(max(float(value), 0.0), 1.0)
 
 
+def numeric_value(value, default=0.0):
+    if pd.isna(value):
+        return default
+    return float(value)
+
+
 def movie_ids_from_titles(titles, movies):
     if titles is None or movies.empty or "title" not in movies.columns:
         return set()
@@ -235,10 +241,10 @@ def apply_hybrid_base_score(candidates):
 
 
 def hybrid_signal_contributions(row):
-    similarity = clamp_score(row.get("similarity_score", 0.0))
-    bayesian = clamp_score(row.get("bayesian_rating_normalized", 0.0))
-    popularity = clamp_score(row.get("popularity_score", 0.0))
-    diversity = clamp_score(row.get("diversity_bonus", 0.0))
+    similarity = numeric_value(row.get("similarity_score", 0.0))
+    bayesian = numeric_value(row.get("bayesian_rating_normalized", 0.0))
+    popularity = numeric_value(row.get("popularity_score", 0.0))
+    diversity = numeric_value(row.get("diversity_bonus", 0.0))
     return {
         "content_similarity": HYBRID_WEIGHTS["content_similarity"] * similarity,
         "bayesian_rating": HYBRID_WEIGHTS["bayesian_rating"] * bayesian,

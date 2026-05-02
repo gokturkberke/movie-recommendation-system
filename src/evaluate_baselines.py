@@ -14,6 +14,8 @@ from evaluation import (
 from recommenders import (
     build_movie_stats,
     build_tfidf_matrix,
+    explain_hybrid_recommendation,
+    hybrid_signal_contributions,
     recommend_based_on_watch_history_content,
 )
 
@@ -96,6 +98,61 @@ def build_metric_report(
     }
 
 
+def recommendation_examples(
+    recommendations,
+    movies=None,
+    limit=0,
+    include_reasons=False,
+):
+    if limit <= 0 or recommendations.empty:
+        return []
+
+    examples = recommendations.head(limit).copy()
+    if movies is not None and not movies.empty and "movieId" in examples.columns and "movieId" in movies.columns:
+        detail_columns = ["movieId"] + [
+            column
+            for column in ["title", "genres"]
+            if column not in examples.columns and column in movies.columns
+        ]
+        if len(detail_columns) > 1:
+            examples = examples.merge(movies[detail_columns].drop_duplicates(subset=["movieId"]), on="movieId", how="left")
+
+    display_columns = [
+        "userId",
+        "movieId",
+        "title",
+        "genres",
+        "score",
+        "final_score",
+        "similarity_score",
+        "bayesian_rating",
+        "rating_count",
+        "popularity_score",
+        "diversity_bonus",
+        "matched_seed_count",
+    ]
+    hybrid_columns = {
+        "similarity_score",
+        "final_score",
+        "bayesian_rating",
+        "popularity_score",
+        "diversity_bonus",
+        "matched_seed_count",
+    }
+
+    rows = []
+    for _, row in examples.iterrows():
+        item = {}
+        for column in display_columns:
+            if column in row and pd.notna(row[column]):
+                item[column] = json_ready(row[column])
+        if include_reasons and hybrid_columns.intersection(examples.columns):
+            item["reason"] = explain_hybrid_recommendation(row)
+            item["score_contributions"] = json_ready(hybrid_signal_contributions(row))
+        rows.append(item)
+    return rows
+
+
 def build_content_recommendations(
     train,
     movies,
@@ -171,6 +228,8 @@ def run_evaluation(
     positive_threshold=4.0,
     include_content=False,
     include_svd=False,
+    example_count=0,
+    include_reasons=False,
 ):
     k_values = k_values or [10]
     max_k = max(k_values)
@@ -210,6 +269,8 @@ def run_evaluation(
             "positive_threshold": float(positive_threshold),
             "include_content": bool(include_content),
             "include_svd": bool(include_svd),
+            "example_count": int(example_count),
+            "include_reasons": bool(include_reasons),
         },
         "data": {
             "ratings_rows": int(len(ratings)),
@@ -231,6 +292,15 @@ def run_evaluation(
             )
         },
     }
+    if example_count > 0:
+        report["examples"] = {
+            "popularity": recommendation_examples(
+                popularity,
+                movies=movies,
+                limit=example_count,
+                include_reasons=False,
+            )
+        }
 
     if include_content:
         content_recommendations = build_content_recommendations(
@@ -250,6 +320,13 @@ def run_evaluation(
             baseline_recommendations=popularity,
             positive_threshold=positive_threshold,
         )
+        if example_count > 0:
+            report["examples"]["content_watch_history"] = recommendation_examples(
+                content_recommendations,
+                movies=movies,
+                limit=example_count,
+                include_reasons=include_reasons,
+            )
 
     if include_svd:
         model, model_error = load_surprise_model()
@@ -270,6 +347,8 @@ def build_arg_parser():
     parser.add_argument("--positive-threshold", type=float, default=4.0, help="Rating threshold treated as positive.")
     parser.add_argument("--include-content", action="store_true", help="Evaluate watch-history content recommendations.")
     parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction.")
+    parser.add_argument("--example-count", type=int, default=0, help="Include this many recommendation examples.")
+    parser.add_argument("--include-reasons", action="store_true", help="Include hybrid explanation text in examples.")
     return parser
 
 
@@ -284,6 +363,8 @@ def main():
         positive_threshold=args.positive_threshold,
         include_content=args.include_content,
         include_svd=args.include_svd,
+        example_count=args.example_count,
+        include_reasons=args.include_reasons,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
