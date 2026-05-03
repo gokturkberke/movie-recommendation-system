@@ -96,11 +96,15 @@ To run a small offline baseline evaluation:
 .venv/bin/python scripts/evaluate_baselines.py --max-users 5 --k 5 --example-count 1
 ```
 
-To run the offline semantic embedding experiment:
+The same script can compare every available baseline (random, popularity, pure TF-IDF, hybrid TF-IDF, semantic-LSA, SVD top-K, SVD rating prediction):
 ```bash
-.venv/bin/python scripts/evaluate_semantic_embeddings.py --max-users 5 --k 5 --components 32 --example-count 1
+.venv/bin/python scripts/evaluate_baselines.py \
+  --max-users 25 --k 5,10,20 \
+  --include-random --include-tfidf --include-content --include-semantic \
+  --include-svd --include-svd-topk \
+  --output-dir artifacts/evaluation
 ```
-This compares popularity, TF-IDF watch-history recommendations, and dense semantic embeddings without changing the Streamlit app or writing new artifacts.
+Results are written to `artifacts/evaluation/metrics_summary.{csv,json}` (gitignored). The Streamlit app is untouched.
 
 ## 📖 Usage
 

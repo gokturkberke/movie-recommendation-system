@@ -1,14 +1,18 @@
-import pandas as pd
 import os
-from surprise import Dataset, Reader, SVD
-from surprise import dump # Model kaydetmek/yüklemek için
+import sys
+from pathlib import Path
 
-# Bu script'in (train_save_model.py) bulunduğu dizin (scripts)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# cleaned_data klasörünün yolu (scripts klasörünün bir üst dizininde olduğunu varsayıyoruz)
-CLEANED_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'cleaned_data'))
-# Kaydedilecek modelin tam yolu (cleaned_data klasörü içine)
-MODEL_SAVE_PATH = os.path.join(CLEANED_DATA_PATH, 'svd_trained_model.pkl')
+import pandas as pd
+from surprise import Dataset, Reader, SVD
+from surprise import dump
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from config import CLEANED_DATA_DIR, SVD_MODEL_PATH  # noqa: E402
+
+CLEANED_DATA_PATH = CLEANED_DATA_DIR
+MODEL_SAVE_PATH = SVD_MODEL_PATH
 
 def load_ratings_data_for_training(data_path):
     ratings_file_path = os.path.join(data_path, 'ratings_clean.csv')

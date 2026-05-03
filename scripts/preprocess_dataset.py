@@ -1,12 +1,17 @@
-import pandas as pd
 import os
 import re
+import sys
+from pathlib import Path
 
-# Find the data folder relative to this script
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+import pandas as pd
 
-RAW_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '../data'))
-CLEANED_DATA_PATH = os.path.abspath(os.path.join(SCRIPT_DIR, '../cleaned_data'))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from config import CLEANED_DATA_DIR, DATA_DIR  # noqa: E402
+
+RAW_DATA_PATH = DATA_DIR
+CLEANED_DATA_PATH = CLEANED_DATA_DIR
 os.makedirs(CLEANED_DATA_PATH, exist_ok=True)
 r"""
 # --- 1. Clean movies.csv ---
