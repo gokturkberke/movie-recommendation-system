@@ -29,7 +29,7 @@ from evaluation import (
     tfidf_content_recommendations,
     top_n_metrics,
 )
-from evaluate_baselines import (
+from evaluation_runner import (
     METRIC_CSV_COLUMNS,
     build_summary_rows,
     build_svd_holdout_predictions,
