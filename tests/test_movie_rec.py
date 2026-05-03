@@ -25,11 +25,13 @@ from evaluate_baselines import (
     METRIC_CSV_COLUMNS,
     build_summary_rows,
     build_svd_holdout_predictions,
+    make_semantic_per_user,
     parse_k_values,
     recommendation_examples,
     select_evaluation_user_ids,
     write_artifacts,
 )
+from experimental.semantic_embeddings import fit_semantic_embeddings
 from recommenders import (
     HYBRID_SCORE_COLUMNS,
     aggregate_watch_history_candidates,
@@ -841,6 +843,35 @@ class TestMovieRecommendations(unittest.TestCase):
             summarize_latency([]),
             {"mean_ms": 0.0, "p95_ms": 0.0, "count": 0, "total_ms": 0.0},
         )
+
+    def test_semantic_content_closure_returns_user_scoped_recommendations(self):
+        train = pd.DataFrame(
+            [
+                {"userId": 7, "movieId": 1, "rating": 5.0, "timestamp": 100},
+                {"userId": 7, "movieId": 3, "rating": 2.5, "timestamp": 200},
+            ]
+        )
+        embedding_index = fit_semantic_embeddings(
+            self.movies,
+            self.tags,
+            n_components=2,
+            random_state=11,
+        )
+
+        closure = make_semantic_per_user(
+            train,
+            self.movies,
+            embedding_index,
+            top_n=3,
+            positive_threshold=4.0,
+        )
+        recommendations = closure(7)
+
+        self.assertFalse(recommendations.empty)
+        self.assertEqual(recommendations["userId"].drop_duplicates().tolist(), [7])
+        self.assertIn("similarity_score", recommendations.columns)
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+        self.assertIn(2, recommendations["movieId"].tolist())
 
     def test_write_artifacts_emits_csv_and_json_with_expected_schema(self):
         report = {

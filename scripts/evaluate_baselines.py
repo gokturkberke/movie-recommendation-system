@@ -22,6 +22,10 @@ from evaluation import (
     tfidf_content_recommendations,
     top_n_metrics,
 )
+from experimental.semantic_embeddings import (
+    fit_semantic_embeddings,
+    semantic_recommendations_for_seed_ids,
+)
 from recommenders import (
     build_movie_stats,
     build_tfidf_matrix,
@@ -232,6 +236,49 @@ def make_hybrid_per_user(
     return recommend
 
 
+def make_semantic_per_user(
+    train,
+    movies,
+    embedding_index,
+    top_n,
+    positive_threshold=4.0,
+):
+    ratings = train.copy() if train is not None else pd.DataFrame()
+    if not ratings.empty and "rating" in ratings.columns:
+        ratings["rating"] = pd.to_numeric(ratings["rating"], errors="coerce")
+
+    def recommend(user_id):
+        if (
+            ratings.empty
+            or movies is None
+            or movies.empty
+            or embedding_index is None
+            or embedding_index.embeddings.size == 0
+        ):
+            return pd.DataFrame()
+        user_history = ratings[
+            (ratings["userId"] == user_id)
+            & (ratings["rating"] >= positive_threshold)
+        ]
+        seed_ids = user_history["movieId"].dropna().drop_duplicates().tolist()
+        if not seed_ids:
+            return pd.DataFrame()
+        recommendations = semantic_recommendations_for_seed_ids(
+            seed_ids,
+            embedding_index,
+            movies,
+            watched_movie_ids=seed_ids,
+            top_n=top_n,
+        )
+        if recommendations.empty:
+            return recommendations
+        recommendations = recommendations.copy()
+        recommendations["userId"] = user_id
+        return recommendations
+
+    return recommend
+
+
 def run_per_user(recommend_for_user, user_ids, measure_latency):
     if measure_latency:
         return measure_per_user_latency(recommend_for_user, user_ids)
@@ -361,11 +408,14 @@ def run_evaluation(
     include_random=False,
     include_tfidf=False,
     include_content=False,
+    include_semantic=False,
     include_svd_topk=False,
     include_svd=False,
     measure_latency=True,
     output_dir=None,
     random_seed=42,
+    semantic_components=64,
+    semantic_random_state=42,
     example_count=0,
     include_reasons=False,
 ):
@@ -375,7 +425,8 @@ def run_evaluation(
     ratings = load_ratings()
     movies = load_movies()
     needs_content_resources = include_tfidf or include_content
-    tags = load_tags() if needs_content_resources else pd.DataFrame()
+    needs_tags = needs_content_resources or include_semantic
+    tags = load_tags() if needs_tags else pd.DataFrame()
     selected_user_ids = select_evaluation_user_ids(
         ratings,
         max_users=max_users,
@@ -409,6 +460,15 @@ def run_evaluation(
     if include_svd or include_svd_topk:
         svd_model, svd_model_error = load_surprise_model()
 
+    embedding_index = None
+    if include_semantic and not movies.empty:
+        embedding_index = fit_semantic_embeddings(
+            movies,
+            tags,
+            n_components=semantic_components,
+            random_state=semantic_random_state,
+        )
+
     report = {
         "config": {
             "max_users": int(max_users),
@@ -419,10 +479,14 @@ def run_evaluation(
             "include_random": bool(include_random),
             "include_tfidf": bool(include_tfidf),
             "include_content": bool(include_content),
+            "include_semantic": bool(include_semantic),
             "include_svd_topk": bool(include_svd_topk),
             "include_svd": bool(include_svd),
             "measure_latency": bool(measure_latency),
             "random_seed": int(random_seed),
+            "semantic_components": int(semantic_components),
+            "semantic_random_state": int(semantic_random_state),
+            "semantic_method": "tfidf+truncated_svd" if include_semantic else None,
             "example_count": int(example_count),
             "include_reasons": bool(include_reasons),
         },
@@ -546,6 +610,28 @@ def run_evaluation(
             positive_threshold=positive_threshold,
         ))
 
+    if include_semantic and embedding_index is not None and embedding_index.embeddings.size:
+        semantic_closure = make_semantic_per_user(
+            train,
+            movies,
+            embedding_index,
+            max_k,
+            positive_threshold=positive_threshold,
+        )
+        record(evaluate_baseline(
+            "semantic_content",
+            semantic_closure,
+            eval_user_ids,
+            holdout,
+            train,
+            movies,
+            k_values,
+            measure_latency,
+            score_col="similarity_score",
+            baseline_recommendations=popularity_recommendations_df,
+            positive_threshold=positive_threshold,
+        ))
+
     if include_svd_topk and svd_model is not None:
         def svd_topk_closure(user_id):
             return svd_topk_recommendations(
@@ -591,6 +677,9 @@ def build_arg_parser():
     parser.add_argument("--include-random", action="store_true", help="Evaluate the random baseline.")
     parser.add_argument("--include-tfidf", action="store_true", help="Evaluate the pure TF-IDF content baseline (no hybrid rerank).")
     parser.add_argument("--include-content", action="store_true", help="Evaluate the watch-history hybrid (TF-IDF + Bayesian + popularity + diversity).")
+    parser.add_argument("--include-semantic", action="store_true", help="Evaluate the semantic content baseline (TF-IDF + TruncatedSVD LSA, watch-history seeds, max-similarity aggregation).")
+    parser.add_argument("--semantic-components", type=int, default=64, help="Latent dimensions for the semantic embedding index (TruncatedSVD).")
+    parser.add_argument("--semantic-random-state", type=int, default=42, help="Random state used by the semantic TruncatedSVD fit.")
     parser.add_argument("--include-svd-topk", action="store_true", help="Evaluate SVD top-K recommendations from the trained Surprise model.")
     parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction (RMSE/MAE).")
     parser.add_argument("--no-measure-latency", action="store_true", help="Disable per-user latency measurement.")
@@ -614,11 +703,14 @@ def main():
         include_random=args.include_random,
         include_tfidf=args.include_tfidf,
         include_content=args.include_content,
+        include_semantic=args.include_semantic,
         include_svd_topk=args.include_svd_topk,
         include_svd=args.include_svd,
         measure_latency=not args.no_measure_latency,
         output_dir=output_dir,
         random_seed=args.random_seed,
+        semantic_components=args.semantic_components,
+        semantic_random_state=args.semantic_random_state,
         example_count=args.example_count,
         include_reasons=args.include_reasons,
     )
