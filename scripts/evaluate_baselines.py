@@ -17,7 +17,6 @@ from evaluation import (
     popularity_recommendations,
     random_recommendations,
     rating_prediction_metrics,
-    summarize_latency,
     svd_topk_recommendations,
     temporal_train_test_split,
     tfidf_content_recommendations,

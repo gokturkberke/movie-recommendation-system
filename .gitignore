@@ -180,6 +180,9 @@ cleaned_data/ratings_clean.csv
 
 cleaned_data/svd_trained_model.pkl
 
+# evaluation outputs
+artifacts/
+
 #notebooks-docs
 /notebooks
 /docs
