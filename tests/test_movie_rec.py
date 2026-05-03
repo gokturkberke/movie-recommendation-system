@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import sys
@@ -10,16 +11,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from config import CONFIG_PATH, CONTENT_CANDIDATE_POOL_SIZE, MENU_ITEMS, SVD_MODEL_PATH, TMDB_TIMEOUT
 from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
 from evaluation import (
+    measure_per_user_latency,
     popularity_recommendations,
+    random_recommendations,
     rating_prediction_metrics,
+    summarize_latency,
+    svd_topk_recommendations,
     temporal_train_test_split,
+    tfidf_content_recommendations,
     top_n_metrics,
 )
 from evaluate_baselines import (
+    METRIC_CSV_COLUMNS,
+    build_summary_rows,
     build_svd_holdout_predictions,
     parse_k_values,
     recommendation_examples,
     select_evaluation_user_ids,
+    write_artifacts,
 )
 from recommenders import (
     HYBRID_SCORE_COLUMNS,
@@ -753,6 +762,141 @@ class TestMovieRecommendations(unittest.TestCase):
 
     def test_app_import_smoke(self):
         import app  # noqa: F401
+
+    def test_random_recommendations_excludes_seen_and_respects_k(self):
+        train = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 1, "rating": 5.0},
+                {"userId": 1, "movieId": 2, "rating": 3.5},
+            ]
+        )
+        candidates = pd.DataFrame({"movieId": [1, 2, 3, 4, 5]})
+
+        first = random_recommendations(train, candidates, user_ids=[1], k=3, seed=7)
+        second = random_recommendations(train, candidates, user_ids=[1], k=3, seed=7)
+
+        recommended_ids = first["movieId"].tolist()
+        self.assertEqual(len(recommended_ids), 3)
+        self.assertEqual(set(recommended_ids).issubset({3, 4, 5}), True)
+        self.assertEqual(len(set(recommended_ids)), len(recommended_ids))
+        self.assertEqual(recommended_ids, second["movieId"].tolist())
+        self.assertTrue(first["score"].is_monotonic_decreasing)
+
+    def test_tfidf_content_recommendations_rank_seed_neighbour_first(self):
+        train = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 1, "rating": 5.0},
+                {"userId": 1, "movieId": 4, "rating": 2.0},
+            ]
+        )
+
+        recommendations = tfidf_content_recommendations(
+            train,
+            user_ids=[1],
+            movies_with_content=self.movies_with_content,
+            tfidf_matrix=self.tfidf_matrix,
+            k=2,
+            positive_threshold=4.0,
+        )
+
+        self.assertEqual(recommendations["userId"].tolist(), [1, 1])
+        self.assertEqual(recommendations.iloc[0]["movieId"], 2)
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+        self.assertNotIn(4, recommendations["movieId"].tolist())
+
+    def test_svd_topk_recommendations_exclude_seen_and_order_by_predicted_score(self):
+        train = pd.DataFrame(
+            [
+                {"userId": 1, "movieId": 1, "rating": 5.0},
+            ]
+        )
+        candidates = pd.DataFrame({"movieId": [1, 2, 3, 4]})
+
+        recommendations = svd_topk_recommendations(
+            FakeSvdModel(),
+            train,
+            candidates,
+            user_ids=[1],
+            k=3,
+        )
+
+        self.assertEqual(recommendations["movieId"].tolist(), [2, 4, 3])
+        self.assertEqual(recommendations["score"].tolist(), [4.9, 4.5, 3.8])
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+
+    def test_measure_per_user_latency_records_durations_and_concatenates_frames(self):
+        def recommend_for_user(user_id):
+            return pd.DataFrame([{"userId": user_id, "movieId": 1, "score": 0.5}])
+
+        recommendations, latency = measure_per_user_latency(recommend_for_user, [1, 2, 3])
+
+        self.assertEqual(latency["count"], 3)
+        self.assertEqual(len(recommendations), 3)
+        self.assertEqual(recommendations["userId"].tolist(), [1, 2, 3])
+        self.assertGreaterEqual(latency["mean_ms"], 0.0)
+        self.assertGreaterEqual(latency["p95_ms"], latency["mean_ms"])
+
+    def test_summarize_latency_handles_empty_input(self):
+        self.assertEqual(
+            summarize_latency([]),
+            {"mean_ms": 0.0, "p95_ms": 0.0, "count": 0, "total_ms": 0.0},
+        )
+
+    def test_write_artifacts_emits_csv_and_json_with_expected_schema(self):
+        report = {
+            "config": {"max_users": 5, "k_values": [5, 10]},
+            "data": {"train_rows": 10, "holdout_rows": 5},
+            "top_n": {
+                "popularity": {
+                    "5": {
+                        "k": 5,
+                        "precision_at_k": 0.2,
+                        "recall_at_k": 0.4,
+                        "hit_rate_at_k": 0.5,
+                        "ndcg_at_k": 0.3,
+                        "catalog_coverage": 0.1,
+                        "user_coverage": 1.0,
+                        "diversity": 0.6,
+                        "novelty": 1.5,
+                        "evaluated_user_count": 5,
+                        "recommended_item_count": 12,
+                    },
+                    "10": {
+                        "k": 10,
+                        "precision_at_k": 0.1,
+                        "recall_at_k": 0.5,
+                        "hit_rate_at_k": 0.6,
+                        "ndcg_at_k": 0.35,
+                        "catalog_coverage": 0.15,
+                        "user_coverage": 1.0,
+                        "diversity": 0.55,
+                        "novelty": 1.4,
+                        "evaluated_user_count": 5,
+                        "recommended_item_count": 22,
+                    },
+                }
+            },
+            "latency": {
+                "popularity": {"mean_ms": 1.25, "p95_ms": 2.5, "count": 5, "total_ms": 6.25}
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = write_artifacts(report, tmp_dir)
+            csv_df = pd.read_csv(paths["metrics_csv"])
+            json_text = Path(paths["metrics_json"]).read_text()
+            run_config = json.loads(Path(paths["run_config"]).read_text())
+
+        self.assertEqual(csv_df.columns.tolist(), METRIC_CSV_COLUMNS)
+        self.assertEqual(csv_df["model"].tolist(), ["popularity", "popularity"])
+        self.assertEqual(csv_df["k"].tolist(), [5, 10])
+        self.assertAlmostEqual(csv_df.loc[0, "precision_at_k"], 0.2)
+        self.assertAlmostEqual(csv_df.loc[0, "latency_mean_ms"], 1.25)
+        self.assertAlmostEqual(csv_df.loc[1, "latency_p95_ms"], 2.5)
+        self.assertIn("popularity", json_text)
+        self.assertEqual(run_config["max_users"], 5)
+        self.assertTrue(Path(paths["metrics_csv_versioned"]).exists())
+        self.assertTrue(Path(paths["metrics_json_versioned"]).exists())
 
 
 if __name__ == "__main__":
