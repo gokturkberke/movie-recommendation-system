@@ -96,6 +96,12 @@ To run a small offline baseline evaluation:
 .venv/bin/python scripts/evaluate_baselines.py --max-users 5 --k 5 --example-count 1
 ```
 
+To run the offline semantic embedding experiment:
+```bash
+.venv/bin/python scripts/evaluate_semantic_embeddings.py --max-users 5 --k 5 --components 32 --example-count 1
+```
+This compares popularity, TF-IDF watch-history recommendations, and dense semantic embeddings without changing the Streamlit app or writing new artifacts.
+
 ## 📖 Usage
 
 Once the application is running:
