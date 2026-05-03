@@ -180,5 +180,6 @@ cleaned_data/ratings_clean.csv
 
 cleaned_data/svd_trained_model.pkl
 
-#notebooks
+#notebooks-docs
 /notebooks
+/docs

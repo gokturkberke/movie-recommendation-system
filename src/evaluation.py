@@ -1,6 +1,9 @@
 import math
+import time
 
+import numpy as np
 import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 DEFAULT_USER_COL = "userId"
@@ -347,3 +350,195 @@ def empty_top_n_metrics(k):
         "evaluated_user_count": 0,
         "recommended_item_count": 0,
     }
+
+
+def seen_items_by_user(train_ratings, user_col=DEFAULT_USER_COL, item_col=DEFAULT_ITEM_COL):
+    if train_ratings is None or train_ratings.empty:
+        return {}
+    if user_col not in train_ratings.columns or item_col not in train_ratings.columns:
+        return {}
+    cleaned = train_ratings[[user_col, item_col]].dropna()
+    if cleaned.empty:
+        return {}
+    return cleaned.groupby(user_col)[item_col].apply(set).to_dict()
+
+
+def random_recommendations(
+    train_ratings,
+    candidate_items,
+    user_ids,
+    k=10,
+    seed=42,
+    user_col=DEFAULT_USER_COL,
+    item_col=DEFAULT_ITEM_COL,
+    score_col=DEFAULT_SCORE_COL,
+):
+    """Sample k unseen items uniformly per user. Score is the random draw used to rank."""
+    output_columns = [user_col, item_col, score_col]
+    candidate_ids = candidate_item_ids(candidate_items, item_col=item_col) or []
+    if not candidate_ids or not user_ids:
+        return pd.DataFrame(columns=output_columns)
+
+    seen_by_user = seen_items_by_user(train_ratings, user_col=user_col, item_col=item_col)
+    candidate_array = np.asarray(candidate_ids)
+    rng = np.random.default_rng(seed)
+
+    rows = []
+    for user_id in user_ids:
+        seen = seen_by_user.get(user_id, set())
+        if seen:
+            mask = ~np.isin(candidate_array, list(seen))
+            eligible = candidate_array[mask]
+        else:
+            eligible = candidate_array
+        if eligible.size == 0:
+            continue
+        take = int(min(k, eligible.size))
+        scores = rng.random(eligible.size)
+        order = np.argsort(-scores)[:take]
+        for index in order:
+            rows.append({
+                user_col: user_id,
+                item_col: eligible[index].item() if hasattr(eligible[index], "item") else eligible[index],
+                score_col: float(scores[index]),
+            })
+    if not rows:
+        return pd.DataFrame(columns=output_columns)
+    return pd.DataFrame(rows, columns=output_columns)
+
+
+def tfidf_content_recommendations(
+    train_ratings,
+    user_ids,
+    movies_with_content,
+    tfidf_matrix,
+    k=10,
+    positive_threshold=4.0,
+    user_col=DEFAULT_USER_COL,
+    item_col=DEFAULT_ITEM_COL,
+    rating_col=DEFAULT_RATING_COL,
+    score_col=DEFAULT_SCORE_COL,
+):
+    """Pure TF-IDF top-K recommendations from each user's positive train seeds.
+
+    For every user we average cosine similarity between their positive-rated train
+    movies and the full catalog, exclude items already seen, and return top-K.
+    No hybrid rerank is applied.
+    """
+    output_columns = [user_col, item_col, score_col]
+    if (
+        train_ratings is None
+        or train_ratings.empty
+        or movies_with_content is None
+        or movies_with_content.empty
+        or tfidf_matrix is None
+        or tfidf_matrix.shape[0] == 0
+        or not user_ids
+    ):
+        return pd.DataFrame(columns=output_columns)
+
+    require_columns(train_ratings, [user_col, item_col, rating_col], "train_ratings")
+    require_columns(movies_with_content, [item_col], "movies_with_content")
+
+    movie_ids = movies_with_content[item_col].astype("int64").to_numpy()
+    movie_id_to_index = {int(value): index for index, value in enumerate(movie_ids)}
+
+    ratings = train_ratings[[user_col, item_col, rating_col]].copy()
+    ratings[rating_col] = pd.to_numeric(ratings[rating_col], errors="coerce")
+    seen_by_user = seen_items_by_user(ratings, user_col=user_col, item_col=item_col)
+    positive_ratings = ratings[ratings[rating_col] >= positive_threshold]
+    seeds_by_user = positive_ratings.groupby(user_col)[item_col].apply(list).to_dict()
+
+    rows = []
+    for user_id in user_ids:
+        seed_ids = seeds_by_user.get(user_id, [])
+        seed_indices = [
+            movie_id_to_index[int(seed_id)]
+            for seed_id in seed_ids
+            if int(seed_id) in movie_id_to_index
+        ]
+        if not seed_indices:
+            continue
+
+        seed_vectors = tfidf_matrix[seed_indices]
+        similarity = np.asarray(cosine_similarity(seed_vectors, tfidf_matrix)).mean(axis=0)
+        seen = seen_by_user.get(user_id, set())
+        order = np.argsort(-similarity)
+        taken = 0
+        for index in order:
+            if taken >= k:
+                break
+            movie_id = int(movie_ids[index])
+            if movie_id in seen:
+                continue
+            rows.append({
+                user_col: user_id,
+                item_col: movie_id,
+                score_col: float(similarity[index]),
+            })
+            taken += 1
+    if not rows:
+        return pd.DataFrame(columns=output_columns)
+    return pd.DataFrame(rows, columns=output_columns)
+
+
+def svd_topk_recommendations(
+    model,
+    train_ratings,
+    candidate_items,
+    user_ids,
+    k=10,
+    user_col=DEFAULT_USER_COL,
+    item_col=DEFAULT_ITEM_COL,
+    score_col=DEFAULT_SCORE_COL,
+):
+    """Top-K predictions from a Surprise-style SVD model, excluding train items."""
+    output_columns = [user_col, item_col, score_col]
+    candidate_ids = candidate_item_ids(candidate_items, item_col=item_col) or []
+    if model is None or not candidate_ids or not user_ids:
+        return pd.DataFrame(columns=output_columns)
+
+    seen_by_user = seen_items_by_user(train_ratings, user_col=user_col, item_col=item_col)
+    rows = []
+    for user_id in user_ids:
+        seen = seen_by_user.get(user_id, set())
+        scored = []
+        for movie_id in candidate_ids:
+            if movie_id in seen:
+                continue
+            prediction = model.predict(uid=user_id, iid=movie_id)
+            scored.append((movie_id, float(prediction.est)))
+        if not scored:
+            continue
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        for movie_id, score in scored[:k]:
+            rows.append({user_col: user_id, item_col: movie_id, score_col: score})
+    if not rows:
+        return pd.DataFrame(columns=output_columns)
+    return pd.DataFrame(rows, columns=output_columns)
+
+
+def summarize_latency(durations_ms):
+    if not durations_ms:
+        return {"mean_ms": 0.0, "p95_ms": 0.0, "count": 0, "total_ms": 0.0}
+    array = np.asarray(durations_ms, dtype=float)
+    return {
+        "mean_ms": float(array.mean()),
+        "p95_ms": float(np.percentile(array, 95)),
+        "count": int(array.size),
+        "total_ms": float(array.sum()),
+    }
+
+
+def measure_per_user_latency(recommend_for_user, user_ids):
+    """Time recommend_for_user(user_id) per user and concatenate the returned frames."""
+    durations_ms = []
+    frames = []
+    for user_id in user_ids:
+        start = time.perf_counter()
+        frame = recommend_for_user(user_id)
+        durations_ms.append((time.perf_counter() - start) * 1000.0)
+        if frame is not None and not frame.empty:
+            frames.append(frame)
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return combined, summarize_latency(durations_ms)

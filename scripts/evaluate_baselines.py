@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -12,9 +13,14 @@ sys.path.insert(0, str(SRC_DIR))
 
 from data_access import load_movies, load_ratings, load_surprise_model, load_tags
 from evaluation import (
+    measure_per_user_latency,
     popularity_recommendations,
+    random_recommendations,
     rating_prediction_metrics,
+    summarize_latency,
+    svd_topk_recommendations,
     temporal_train_test_split,
+    tfidf_content_recommendations,
     top_n_metrics,
 )
 from recommenders import (
@@ -24,6 +30,26 @@ from recommenders import (
     hybrid_signal_contributions,
     recommend_based_on_watch_history_content,
 )
+
+
+METRIC_CSV_COLUMNS = [
+    "model",
+    "k",
+    "precision_at_k",
+    "recall_at_k",
+    "hit_rate_at_k",
+    "ndcg_at_k",
+    "catalog_coverage",
+    "user_coverage",
+    "diversity",
+    "novelty",
+    "evaluated_user_count",
+    "recommended_item_count",
+    "latency_mean_ms",
+    "latency_p95_ms",
+]
+
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "artifacts" / "evaluation"
 
 
 def parse_k_values(raw_value):
@@ -159,51 +185,64 @@ def recommendation_examples(
     return rows
 
 
-def build_content_recommendations(
+def make_hybrid_per_user(
     train,
     movies,
-    tags,
-    user_ids,
+    movies_with_content,
+    tfidf_matrix,
+    movie_stats,
     top_n,
     positive_threshold=4.0,
 ):
-    if train.empty or movies.empty or not user_ids:
-        return pd.DataFrame(columns=["userId", "movieId"])
+    ratings = train.copy() if train is not None else pd.DataFrame()
+    if not ratings.empty and "rating" in ratings.columns:
+        ratings["rating"] = pd.to_numeric(ratings["rating"], errors="coerce")
+    stats = movie_stats if movie_stats is not None and not movie_stats.empty else None
 
-    tfidf_matrix, _, movies_with_content = build_tfidf_matrix(movies.copy(), tags.copy())
-    if tfidf_matrix is None or movies_with_content.empty:
-        return pd.DataFrame(columns=["userId", "movieId"])
-
-    movie_stats = build_movie_stats(train[["movieId", "rating"]])
-    recommendations = []
-    ratings = train.copy()
-    ratings["rating"] = pd.to_numeric(ratings["rating"], errors="coerce")
-    for user_id in user_ids:
+    def recommend(user_id):
+        if (
+            ratings.empty
+            or movies is None
+            or movies.empty
+            or tfidf_matrix is None
+            or movies_with_content is None
+            or movies_with_content.empty
+        ):
+            return pd.DataFrame()
         user_history = ratings[
             (ratings["userId"] == user_id)
             & (ratings["rating"] >= positive_threshold)
         ]
         seed_ids = user_history["movieId"].dropna().drop_duplicates().tolist()
         if not seed_ids:
-            continue
-
-        user_recommendations = recommend_based_on_watch_history_content(
+            return pd.DataFrame()
+        recommendations = recommend_based_on_watch_history_content(
             seed_ids,
             movies_with_content,
             tfidf_matrix,
             movies,
-            movie_stats=movie_stats,
+            movie_stats=stats,
             top_n=top_n,
         )
-        if user_recommendations.empty:
-            continue
-        user_recommendations = user_recommendations.copy()
-        user_recommendations["userId"] = user_id
-        recommendations.append(user_recommendations)
+        if recommendations.empty:
+            return recommendations
+        recommendations = recommendations.copy()
+        recommendations["userId"] = user_id
+        return recommendations
 
-    if not recommendations:
-        return pd.DataFrame(columns=["userId", "movieId"])
-    return pd.concat(recommendations, ignore_index=True)
+    return recommend
+
+
+def run_per_user(recommend_for_user, user_ids, measure_latency):
+    if measure_latency:
+        return measure_per_user_latency(recommend_for_user, user_ids)
+    frames = []
+    for user_id in user_ids:
+        frame = recommend_for_user(user_id)
+        if frame is not None and not frame.empty:
+            frames.append(frame)
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return combined, None
 
 
 def build_svd_holdout_predictions(model, holdout):
@@ -226,14 +265,108 @@ def build_svd_holdout_predictions(model, holdout):
     return pd.DataFrame(rows)
 
 
+def evaluate_baseline(
+    name,
+    recommend_for_user,
+    eval_user_ids,
+    holdout,
+    train,
+    movies,
+    k_values,
+    measure_latency,
+    score_col,
+    baseline_recommendations=None,
+    positive_threshold=4.0,
+):
+    recommendations, latency = run_per_user(recommend_for_user, eval_user_ids, measure_latency)
+    metrics = build_metric_report(
+        recommendations,
+        holdout,
+        train,
+        movies,
+        k_values,
+        baseline_recommendations=baseline_recommendations,
+        score_col=score_col,
+        positive_threshold=positive_threshold,
+    )
+    return {
+        "name": name,
+        "recommendations": recommendations,
+        "metrics": metrics,
+        "latency": latency,
+    }
+
+
+def build_summary_rows(report):
+    top_n = report.get("top_n") or {}
+    latency = report.get("latency") or {}
+    rows = []
+    for model_name in sorted(top_n.keys()):
+        per_k = top_n[model_name] or {}
+        latency_summary = latency.get(model_name) or {}
+        for k_str in sorted(per_k.keys(), key=lambda value: int(value)):
+            metrics = per_k[k_str] or {}
+            rows.append({
+                "model": model_name,
+                "k": int(k_str),
+                "precision_at_k": float(metrics.get("precision_at_k", 0.0)),
+                "recall_at_k": float(metrics.get("recall_at_k", 0.0)),
+                "hit_rate_at_k": float(metrics.get("hit_rate_at_k", 0.0)),
+                "ndcg_at_k": float(metrics.get("ndcg_at_k", 0.0)),
+                "catalog_coverage": float(metrics.get("catalog_coverage", 0.0)),
+                "user_coverage": float(metrics.get("user_coverage", 0.0)),
+                "diversity": float(metrics.get("diversity", 0.0)),
+                "novelty": float(metrics.get("novelty", 0.0)),
+                "evaluated_user_count": int(metrics.get("evaluated_user_count", 0)),
+                "recommended_item_count": int(metrics.get("recommended_item_count", 0)),
+                "latency_mean_ms": float(latency_summary.get("mean_ms", 0.0)) if latency_summary else 0.0,
+                "latency_p95_ms": float(latency_summary.get("p95_ms", 0.0)) if latency_summary else 0.0,
+            })
+    return rows
+
+
+def write_artifacts(report, output_dir):
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+
+    payload = {key: value for key, value in report.items() if key != "artifacts"}
+    summary_rows = build_summary_rows(payload)
+    summary_df = pd.DataFrame(summary_rows, columns=METRIC_CSV_COLUMNS)
+
+    json_text = json.dumps(json_ready(payload), indent=2, sort_keys=True, default=str)
+
+    paths = {
+        "metrics_json": output_path / "metrics_summary.json",
+        "metrics_json_versioned": output_path / f"metrics_summary_{timestamp}.json",
+        "metrics_csv": output_path / "metrics_summary.csv",
+        "metrics_csv_versioned": output_path / f"metrics_summary_{timestamp}.csv",
+        "run_config": output_path / "run_config.json",
+    }
+    paths["metrics_json"].write_text(json_text)
+    paths["metrics_json_versioned"].write_text(json_text)
+    summary_df.to_csv(paths["metrics_csv"], index=False)
+    summary_df.to_csv(paths["metrics_csv_versioned"], index=False)
+    paths["run_config"].write_text(
+        json.dumps(json_ready(payload.get("config", {})), indent=2, sort_keys=True, default=str)
+    )
+    return {key: str(value) for key, value in paths.items()}
+
+
 def run_evaluation(
     max_users=100,
     k_values=None,
     holdout_count=1,
     min_interactions=5,
     positive_threshold=4.0,
+    include_random=False,
+    include_tfidf=False,
     include_content=False,
+    include_svd_topk=False,
     include_svd=False,
+    measure_latency=True,
+    output_dir=None,
+    random_seed=42,
     example_count=0,
     include_reasons=False,
 ):
@@ -242,7 +375,8 @@ def run_evaluation(
 
     ratings = load_ratings()
     movies = load_movies()
-    tags = load_tags() if include_content else pd.DataFrame()
+    needs_content_resources = include_tfidf or include_content
+    tags = load_tags() if needs_content_resources else pd.DataFrame()
     selected_user_ids = select_evaluation_user_ids(
         ratings,
         max_users=max_users,
@@ -256,15 +390,25 @@ def run_evaluation(
         min_interactions=min_interactions,
     )
 
-    eval_user_ids = holdout["userId"].dropna().drop_duplicates().tolist() if "userId" in holdout.columns else []
-    candidate_items = movies[["movieId"]] if "movieId" in movies.columns else None
-    popularity = popularity_recommendations(
-        train,
-        candidate_items=candidate_items,
-        user_ids=eval_user_ids,
-        k=max_k,
-        positive_threshold=positive_threshold,
+    eval_user_ids = (
+        holdout["userId"].dropna().drop_duplicates().tolist()
+        if "userId" in holdout.columns
+        else []
     )
+    candidate_items = movies[["movieId"]] if "movieId" in movies.columns else None
+
+    tfidf_matrix = None
+    movies_with_content = pd.DataFrame()
+    movie_stats = pd.DataFrame()
+    if needs_content_resources and not movies.empty:
+        tfidf_matrix, _, movies_with_content = build_tfidf_matrix(movies.copy(), tags.copy())
+        if include_content and not train.empty and "rating" in train.columns:
+            movie_stats = build_movie_stats(train[["movieId", "rating"]])
+
+    svd_model = None
+    svd_model_error = None
+    if include_svd or include_svd_topk:
+        svd_model, svd_model_error = load_surprise_model()
 
     report = {
         "config": {
@@ -273,8 +417,13 @@ def run_evaluation(
             "holdout_count": int(holdout_count),
             "min_interactions": int(min_interactions),
             "positive_threshold": float(positive_threshold),
+            "include_random": bool(include_random),
+            "include_tfidf": bool(include_tfidf),
             "include_content": bool(include_content),
+            "include_svd_topk": bool(include_svd_topk),
             "include_svd": bool(include_svd),
+            "measure_latency": bool(measure_latency),
+            "random_seed": int(random_seed),
             "example_count": int(example_count),
             "include_reasons": bool(include_reasons),
         },
@@ -286,60 +435,149 @@ def run_evaluation(
             "holdout_rows": int(len(holdout)),
             "evaluated_user_count": int(len(eval_user_ids)),
         },
-        "top_n": {
-            "popularity": build_metric_report(
-                popularity,
-                holdout,
-                train,
-                movies,
-                k_values,
-                score_col="score",
-                positive_threshold=positive_threshold,
-            )
-        },
+        "top_n": {},
+        "latency": {},
     }
     if example_count > 0:
-        report["examples"] = {
-            "popularity": recommendation_examples(
-                popularity,
+        report["examples"] = {}
+
+    def record(result):
+        report["top_n"][result["name"]] = result["metrics"]
+        if result["latency"] is not None:
+            report["latency"][result["name"]] = result["latency"]
+        if example_count > 0:
+            report["examples"][result["name"]] = recommendation_examples(
+                result["recommendations"],
                 movies=movies,
                 limit=example_count,
-                include_reasons=False,
+                include_reasons=include_reasons and result["name"] == "hybrid_content",
             )
-        }
 
-    if include_content:
-        content_recommendations = build_content_recommendations(
-            train,
-            movies,
-            tags,
+    popularity_closure = lambda user_id: popularity_recommendations(
+        train,
+        candidate_items=candidate_items,
+        user_ids=[user_id],
+        k=max_k,
+        positive_threshold=positive_threshold,
+    )
+    popularity_result = evaluate_baseline(
+        "popularity",
+        popularity_closure,
+        eval_user_ids,
+        holdout,
+        train,
+        movies,
+        k_values,
+        measure_latency,
+        score_col="score",
+        positive_threshold=positive_threshold,
+    )
+    record(popularity_result)
+    popularity_recommendations_df = popularity_result["recommendations"]
+
+    if include_random:
+        def random_closure(user_id):
+            per_user_seed = (random_seed * 1000003 + int(user_id)) & 0x7FFFFFFF
+            return random_recommendations(
+                train,
+                candidate_items,
+                [user_id],
+                k=max_k,
+                seed=per_user_seed,
+            )
+        record(evaluate_baseline(
+            "random",
+            random_closure,
             eval_user_ids,
-            max_k,
-            positive_threshold=positive_threshold,
-        )
-        report["top_n"]["content_watch_history"] = build_metric_report(
-            content_recommendations,
             holdout,
             train,
             movies,
             k_values,
-            baseline_recommendations=popularity,
+            measure_latency,
+            score_col="score",
+            baseline_recommendations=popularity_recommendations_df,
+            positive_threshold=positive_threshold,
+        ))
+
+    if include_tfidf and tfidf_matrix is not None and not movies_with_content.empty:
+        def tfidf_closure(user_id):
+            return tfidf_content_recommendations(
+                train,
+                [user_id],
+                movies_with_content,
+                tfidf_matrix,
+                k=max_k,
+                positive_threshold=positive_threshold,
+            )
+        record(evaluate_baseline(
+            "tfidf_content",
+            tfidf_closure,
+            eval_user_ids,
+            holdout,
+            train,
+            movies,
+            k_values,
+            measure_latency,
+            score_col="score",
+            baseline_recommendations=popularity_recommendations_df,
+            positive_threshold=positive_threshold,
+        ))
+
+    if include_content and tfidf_matrix is not None and not movies_with_content.empty:
+        hybrid_closure = make_hybrid_per_user(
+            train,
+            movies,
+            movies_with_content,
+            tfidf_matrix,
+            movie_stats,
+            max_k,
             positive_threshold=positive_threshold,
         )
-        if example_count > 0:
-            report["examples"]["content_watch_history"] = recommendation_examples(
-                content_recommendations,
-                movies=movies,
-                limit=example_count,
-                include_reasons=include_reasons,
+        record(evaluate_baseline(
+            "hybrid_content",
+            hybrid_closure,
+            eval_user_ids,
+            holdout,
+            train,
+            movies,
+            k_values,
+            measure_latency,
+            score_col=None,
+            baseline_recommendations=popularity_recommendations_df,
+            positive_threshold=positive_threshold,
+        ))
+
+    if include_svd_topk and svd_model is not None:
+        def svd_topk_closure(user_id):
+            return svd_topk_recommendations(
+                svd_model,
+                train,
+                candidate_items,
+                [user_id],
+                k=max_k,
             )
+        record(evaluate_baseline(
+            "svd_topk",
+            svd_topk_closure,
+            eval_user_ids,
+            holdout,
+            train,
+            movies,
+            k_values,
+            measure_latency,
+            score_col="score",
+            baseline_recommendations=popularity_recommendations_df,
+            positive_threshold=positive_threshold,
+        ))
 
     if include_svd:
-        model, model_error = load_surprise_model()
-        report["svd_rating_prediction"] = {"error": model_error}
-        if model is not None:
-            svd_predictions = build_svd_holdout_predictions(model, holdout)
+        report["svd_rating_prediction"] = {"error": svd_model_error}
+        if svd_model is not None:
+            svd_predictions = build_svd_holdout_predictions(svd_model, holdout)
             report["svd_rating_prediction"] = rating_prediction_metrics(svd_predictions)
+
+    if output_dir is not None:
+        report["artifacts"] = write_artifacts(report, output_dir)
 
     return json_ready(report)
 
@@ -351,8 +589,14 @@ def build_arg_parser():
     parser.add_argument("--holdout-count", type=int, default=1, help="Latest interactions held out per user.")
     parser.add_argument("--min-interactions", type=int, default=5, help="Minimum interactions required per user.")
     parser.add_argument("--positive-threshold", type=float, default=4.0, help="Rating threshold treated as positive.")
-    parser.add_argument("--include-content", action="store_true", help="Evaluate watch-history content recommendations.")
-    parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction.")
+    parser.add_argument("--include-random", action="store_true", help="Evaluate the random baseline.")
+    parser.add_argument("--include-tfidf", action="store_true", help="Evaluate the pure TF-IDF content baseline (no hybrid rerank).")
+    parser.add_argument("--include-content", action="store_true", help="Evaluate the watch-history hybrid (TF-IDF + Bayesian + popularity + diversity).")
+    parser.add_argument("--include-svd-topk", action="store_true", help="Evaluate SVD top-K recommendations from the trained Surprise model.")
+    parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction (RMSE/MAE).")
+    parser.add_argument("--no-measure-latency", action="store_true", help="Disable per-user latency measurement.")
+    parser.add_argument("--random-seed", type=int, default=42, help="Seed used by the random baseline.")
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Directory for metrics_summary.json/csv. Use empty string to disable saving.")
     parser.add_argument("--example-count", type=int, default=0, help="Include this many recommendation examples.")
     parser.add_argument("--include-reasons", action="store_true", help="Include hybrid explanation text in examples.")
     return parser
@@ -361,14 +605,21 @@ def build_arg_parser():
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
+    output_dir = args.output_dir if args.output_dir else None
     report = run_evaluation(
         max_users=args.max_users,
         k_values=parse_k_values(args.k),
         holdout_count=args.holdout_count,
         min_interactions=args.min_interactions,
         positive_threshold=args.positive_threshold,
+        include_random=args.include_random,
+        include_tfidf=args.include_tfidf,
         include_content=args.include_content,
+        include_svd_topk=args.include_svd_topk,
         include_svd=args.include_svd,
+        measure_latency=not args.no_measure_latency,
+        output_dir=output_dir,
+        random_seed=args.random_seed,
         example_count=args.example_count,
         include_reasons=args.include_reasons,
     )
