@@ -40,6 +40,7 @@ from evaluation_runner import (
     write_artifacts,
 )
 from experimental.semantic_embeddings import fit_semantic_embeddings
+from preprocessing import clean_tag, clean_text_for_matching, clean_title_display
 from recommenders import (
     HYBRID_SCORE_COLUMNS,
     aggregate_watch_history_candidates,
@@ -857,6 +858,14 @@ class TestMovieRecommendations(unittest.TestCase):
             summarize_latency([]),
             {"mean_ms": 0.0, "p95_ms": 0.0, "count": 0, "total_ms": 0.0},
         )
+
+    def test_preprocessing_helpers_normalize_titles_and_tags(self):
+        self.assertEqual(clean_title_display("Toy Story (1995)"), "Toy Story (1995)")
+        self.assertEqual(clean_title_display("Sabrina!  "), "Sabrina")
+        self.assertEqual(clean_text_for_matching("Toy Story (1995)"), "toy story")
+        self.assertEqual(clean_text_for_matching("OKA!"), "oka")
+        self.assertEqual(clean_tag("Pixar Toys!"), "pixar toys")
+        self.assertEqual(clean_tag("  noir-film  "), "noirfilm")
 
     def test_semantic_content_closure_returns_user_scoped_recommendations(self):
         train = pd.DataFrame(

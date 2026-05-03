@@ -1,151 +1,42 @@
-import os
-import re
+"""CLI for the MovieLens preprocessing pipeline.
+
+The pipeline body lives in ``src/preprocessing.py``. This script is a thin
+argparse wrapper.
+"""
+
+import argparse
 import sys
 from pathlib import Path
-
-import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from config import CLEANED_DATA_DIR, DATA_DIR  # noqa: E402
-
-RAW_DATA_PATH = DATA_DIR
-CLEANED_DATA_PATH = CLEANED_DATA_DIR
-os.makedirs(CLEANED_DATA_PATH, exist_ok=True)
-r"""
-# --- 1. Clean movies.csv ---
-movies = pd.read_csv(os.path.join(RAW_DATA_PATH, 'movies.csv'))
-
-# Remove duplicates
-movies = movies.drop_duplicates(subset=['movieId'])
-
-# Handle missing values - Hem NaN hem de (no genres listed) olanları temizle
-movies = movies.dropna(subset=['title'])
-movies = movies[~movies['genres'].str.contains(r"\(no genres listed\)", na=False)]
-movies['title'] = movies['title'].fillna('').astype(str).str.strip()
-movies['genres'] = movies['genres'].fillna('').astype(str).str.strip()
-
-# Clean title (remove non-alphanumeric characters except spaces and year)
-def clean_title(title):
-    return re.sub(r'[^a-zA-Z0-9\s\(\)]', '', title)
-
-movies['title'] = movies['title'].apply(clean_title)
-
-# One-hot encode genres (0-1)
-all_genres = set()
-movies['genres'].str.split('|').apply(all_genres.update)
-for genre in all_genres:
-    movies[genre] = movies['genres'].apply(lambda x: int(genre in x.split('|')))
-
-# Save cleaned file
-movies.to_csv(os.path.join(CLEANED_DATA_PATH, 'movies_clean.csv'), index=False)
-print("movies_clean.csv saved.")
-"""
-
-# --- 1. Clean movies.csv ---
-movies = pd.read_csv(os.path.join(RAW_DATA_PATH, 'movies.csv'))
-
-# Remove duplicates
-movies = movies.drop_duplicates(subset=['movieId'])
-
-# Handle missing values - Hem NaN hem de (no genres listed) olanları temizle
-movies = movies.dropna(subset=['title'])
-movies = movies[~movies['genres'].str.contains(r"\(no genres listed\)", na=False)]
-movies['title'] = movies['title'].fillna('').astype(str).str.strip()
-movies['genres'] = movies['genres'].fillna('').astype(str).str.strip()
-
-# Clean title for display while preserving the release year.
-def clean_title_display(title):
-    if pd.isnull(title):
-        return ""
-    title = str(title)
-    title = re.sub(r'[^a-zA-Z0-9\s()]', '', title) # Keep parentheses
-    title = re.sub(r'\s+', ' ', title).strip() # Remove extra spaces
-    return title
-
-# Define a comprehensive text cleaning function for matching and TF-IDF
-def clean_text_for_matching(text):
-    if pd.isnull(text):
-        return ""
-    text = str(text).lower()
-    # Remove year from title, e.g., " (1995)"
-    text = re.sub(r'\s*\(\d{4}\)', '', text)
-    # Remove all non-alphanumeric characters (except spaces)
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip() # Remove extra spaces
-    return text
-
-# Orijinal başlığı ve türü sakla
-movies['title_original'] = movies['title']
-movies['genres_original'] = movies['genres']
-
-# Keep release years in display titles to disambiguate remakes and same-name movies.
-movies['title_display'] = movies['title_original'].apply(clean_title_display)
-movies['title_clean'] = movies['title_display']
-movies['title'] = movies['title_display']
-
-# Create cleaned versions for matching/TF-IDF
-movies['title_for_matching'] = movies['title_original'].apply(clean_text_for_matching)
-movies['genres_for_matching'] = movies['genres_original'].apply(lambda x: clean_text_for_matching(x.replace('|', ' ')))
+from preprocessing import (  # noqa: E402
+    DEFAULT_MIN_RATINGS_PER_MOVIE,
+    DEFAULT_MIN_RATINGS_PER_USER,
+    run_preprocessing,
+)
 
 
-# Multi-hot encode genres from 'genres_original'
-# Ensure 'genres_original' is string and not NaN before splitting
-movies['genres_original_list'] = movies['genres_original'].fillna('').astype(str).str.split('|')
-all_genres = set(g for sublist in movies['genres_original_list'] for g in sublist if g) # Collect all unique genres
+def build_arg_parser():
+    parser = argparse.ArgumentParser(description="Clean MovieLens raw CSVs into cleaned_data/.")
+    parser.add_argument("--raw-data-dir", default=str(DATA_DIR), help="Directory containing raw MovieLens CSVs.")
+    parser.add_argument("--cleaned-data-dir", default=str(CLEANED_DATA_DIR), help="Directory for cleaned outputs.")
+    parser.add_argument("--min-ratings-per-user", type=int, default=DEFAULT_MIN_RATINGS_PER_USER, help="Drop users with fewer than this many ratings.")
+    parser.add_argument("--min-ratings-per-movie", type=int, default=DEFAULT_MIN_RATINGS_PER_MOVIE, help="Drop movies with fewer than this many ratings.")
+    return parser
 
-for genre in sorted(list(all_genres)): # Sorted for consistent column order
-    if genre: # Ensure genre is not an empty string
-        movies[f'genre_{clean_text_for_matching(genre)}'] = movies['genres_original_list'].apply(lambda x: 1 if genre in x else 0)
 
-movies = movies.drop(columns=['genres_original_list']) # Clean up temporary column
+def main():
+    args = build_arg_parser().parse_args()
+    run_preprocessing(
+        raw_data_dir=Path(args.raw_data_dir),
+        cleaned_data_dir=Path(args.cleaned_data_dir),
+        min_ratings_per_user=args.min_ratings_per_user,
+        min_ratings_per_movie=args.min_ratings_per_movie,
+    )
 
-# Save cleaned file
-movies.to_csv(os.path.join(CLEANED_DATA_PATH, 'movies_clean.csv'), index=False)
-print("movies_clean.csv saved.")
-# --- 2. Clean ratings.csv ---
-ratings = pd.read_csv(os.path.join(RAW_DATA_PATH, 'ratings.csv'))
 
-# Remove duplicates
-ratings = ratings.drop_duplicates(subset=['userId', 'movieId', 'timestamp'])
-
-# Handle missing values
-ratings = ratings.dropna(subset=['userId', 'movieId', 'rating'])
-
-# Remove users with <5 ratings
-user_counts = ratings['userId'].value_counts()
-ratings = ratings[ratings['userId'].isin(user_counts[user_counts >= 5].index)]
-
-# Remove movies with <5 ratings
-movie_counts = ratings['movieId'].value_counts()
-ratings = ratings[ratings['movieId'].isin(movie_counts[movie_counts >= 5].index)]
-
-# Normalize ratings (z-score)
-ratings['rating_z'] = (ratings['rating'] - ratings['rating'].mean()) / ratings['rating'].std()
-
-ratings.to_csv(os.path.join(CLEANED_DATA_PATH, 'ratings_clean.csv'), index=False)
-print("ratings_clean.csv saved.")
-
-# --- 3. Clean tags.csv ---
-tags = pd.read_csv(os.path.join(RAW_DATA_PATH, 'tags.csv'))
-
-# Remove duplicates
-tags = tags.drop_duplicates(subset=['userId', 'movieId', 'tag', 'timestamp'])
-
-# Handle missing values
-tags = tags.dropna(subset=['userId', 'movieId', 'tag'])
-
-# Clean tags (remove special characters with regex, use lowercase)
-def clean_tag(tag):
-    tag = str(tag).lower()
-    tag = re.sub(r'[^a-z0-9\s]', '', tag)
-    return tag.strip()
-
-tags['tag'] = tags['tag'].apply(clean_tag)
-
-tags.to_csv(os.path.join(CLEANED_DATA_PATH, 'tags_clean.csv'), index=False)
-print("tags_clean.csv saved.")
-
-print("Preprocessing complete. Cleaned files are in the 'cleaned_data' folder.")
-
+if __name__ == "__main__":
+    main()
