@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
+from config import EVALUATION_DEFAULTS, EVALUATION_OUTPUT_DIR
 from data_access import load_movies, load_ratings, load_surprise_model, load_tags
 from evaluation import (
     measure_per_user_latency,
@@ -52,7 +53,9 @@ METRIC_CSV_COLUMNS = [
     "latency_p95_ms",
 ]
 
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "artifacts" / "evaluation"
+_SEMANTIC_DEFAULTS = EVALUATION_DEFAULTS.get("semantic") or {}
+_DEFAULT_K_VALUES = EVALUATION_DEFAULTS.get("k_values") or [10]
+_DEFAULT_K_STR = ",".join(str(int(value)) for value in _DEFAULT_K_VALUES)
 
 
 def parse_k_values(raw_value):
@@ -669,22 +672,22 @@ def run_evaluation(
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Evaluate offline recommendation baselines.")
-    parser.add_argument("--max-users", type=int, default=100, help="Maximum eligible users to evaluate. Use 0 for all.")
-    parser.add_argument("--k", default="10", help="Comma-separated top-N cutoffs, for example 5,10,20.")
-    parser.add_argument("--holdout-count", type=int, default=1, help="Latest interactions held out per user.")
-    parser.add_argument("--min-interactions", type=int, default=5, help="Minimum interactions required per user.")
-    parser.add_argument("--positive-threshold", type=float, default=4.0, help="Rating threshold treated as positive.")
+    parser.add_argument("--max-users", type=int, default=int(EVALUATION_DEFAULTS.get("max_users", 100)), help="Maximum eligible users to evaluate. Use 0 for all.")
+    parser.add_argument("--k", default=_DEFAULT_K_STR, help="Comma-separated top-N cutoffs, for example 5,10,20.")
+    parser.add_argument("--holdout-count", type=int, default=int(EVALUATION_DEFAULTS.get("holdout_count", 1)), help="Latest interactions held out per user.")
+    parser.add_argument("--min-interactions", type=int, default=int(EVALUATION_DEFAULTS.get("min_interactions", 5)), help="Minimum interactions required per user.")
+    parser.add_argument("--positive-threshold", type=float, default=float(EVALUATION_DEFAULTS.get("positive_threshold", 4.0)), help="Rating threshold treated as positive.")
     parser.add_argument("--include-random", action="store_true", help="Evaluate the random baseline.")
     parser.add_argument("--include-tfidf", action="store_true", help="Evaluate the pure TF-IDF content baseline (no hybrid rerank).")
     parser.add_argument("--include-content", action="store_true", help="Evaluate the watch-history hybrid (TF-IDF + Bayesian + popularity + diversity).")
     parser.add_argument("--include-semantic", action="store_true", help="Evaluate the semantic content baseline (TF-IDF + TruncatedSVD LSA, watch-history seeds, max-similarity aggregation).")
-    parser.add_argument("--semantic-components", type=int, default=64, help="Latent dimensions for the semantic embedding index (TruncatedSVD).")
-    parser.add_argument("--semantic-random-state", type=int, default=42, help="Random state used by the semantic TruncatedSVD fit.")
+    parser.add_argument("--semantic-components", type=int, default=int(_SEMANTIC_DEFAULTS.get("components", 64)), help="Latent dimensions for the semantic embedding index (TruncatedSVD).")
+    parser.add_argument("--semantic-random-state", type=int, default=int(_SEMANTIC_DEFAULTS.get("random_state", 42)), help="Random state used by the semantic TruncatedSVD fit.")
     parser.add_argument("--include-svd-topk", action="store_true", help="Evaluate SVD top-K recommendations from the trained Surprise model.")
     parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction (RMSE/MAE).")
     parser.add_argument("--no-measure-latency", action="store_true", help="Disable per-user latency measurement.")
-    parser.add_argument("--random-seed", type=int, default=42, help="Seed used by the random baseline.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Directory for metrics_summary.json/csv. Use empty string to disable saving.")
+    parser.add_argument("--random-seed", type=int, default=int(EVALUATION_DEFAULTS.get("random_seed", 42)), help="Seed used by the random baseline.")
+    parser.add_argument("--output-dir", default=str(EVALUATION_OUTPUT_DIR), help="Directory for metrics_summary.json/csv. Use empty string to disable saving.")
     parser.add_argument("--example-count", type=int, default=0, help="Include this many recommendation examples.")
     parser.add_argument("--include-reasons", action="store_true", help="Include hybrid explanation text in examples.")
     return parser

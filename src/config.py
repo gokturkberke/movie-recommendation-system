@@ -38,6 +38,19 @@ DEFAULT_CONFIG = {
         "thoughtful": ["Documentary", "Drama"],
         "surprised": ["Mystery", "Thriller"],
     },
+    "evaluation": {
+        "max_users": 100,
+        "k_values": [5, 10, 20],
+        "holdout_count": 1,
+        "min_interactions": 5,
+        "positive_threshold": 4.0,
+        "random_seed": 42,
+        "output_dir": "artifacts/evaluation",
+        "semantic": {
+            "components": 64,
+            "random_state": 42,
+        },
+    },
     "tmdb": {
         "timeout_seconds": 8,
     },
@@ -140,3 +153,5 @@ WATCH_HISTORY_WEIGHTS = config_value(["recommendations", "watch_history_weights"
 TMDB_TIMEOUT = int(config_value(["tmdb", "timeout_seconds"], 8))
 MENU_ITEMS = config_value(["ui", "menu_items"], [])
 DEMO_PROFILES_WITH_GENRES = config_value(["ui", "demo_profiles"], {})
+EVALUATION_DEFAULTS = config_value(["evaluation"], {})
+EVALUATION_OUTPUT_DIR = project_path(config_value(["evaluation", "output_dir"], "artifacts/evaluation"))

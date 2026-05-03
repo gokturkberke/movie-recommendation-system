@@ -8,7 +8,15 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import CONFIG_PATH, CONTENT_CANDIDATE_POOL_SIZE, MENU_ITEMS, SVD_MODEL_PATH, TMDB_TIMEOUT
+from config import (
+    CONFIG_PATH,
+    CONTENT_CANDIDATE_POOL_SIZE,
+    EVALUATION_DEFAULTS,
+    EVALUATION_OUTPUT_DIR,
+    MENU_ITEMS,
+    SVD_MODEL_PATH,
+    TMDB_TIMEOUT,
+)
 from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
 from evaluation import (
     measure_per_user_latency,
@@ -139,6 +147,12 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertEqual(TMDB_TIMEOUT, 8)
         self.assertEqual(SVD_MODEL_PATH.name, "svd_trained_model.pkl")
         self.assertIn("Content-Based Recommendation", MENU_ITEMS[0])
+        self.assertEqual(EVALUATION_DEFAULTS["max_users"], 100)
+        self.assertEqual(EVALUATION_DEFAULTS["k_values"], [5, 10, 20])
+        self.assertEqual(EVALUATION_DEFAULTS["positive_threshold"], 4.0)
+        self.assertEqual(EVALUATION_DEFAULTS["semantic"]["components"], 64)
+        self.assertEqual(EVALUATION_OUTPUT_DIR.name, "evaluation")
+        self.assertTrue(EVALUATION_OUTPUT_DIR.is_absolute())
 
     def test_temporal_holdout_uses_latest_interactions_per_user(self):
         ratings = pd.DataFrame(

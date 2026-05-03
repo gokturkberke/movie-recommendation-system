@@ -49,6 +49,18 @@ mood_genre_map:
     - Mystery
     - Thriller
 
+evaluation:
+  max_users: 100
+  k_values: [5, 10, 20]
+  holdout_count: 1
+  min_interactions: 5
+  positive_threshold: 4.0
+  random_seed: 42
+  output_dir: artifacts/evaluation
+  semantic:
+    components: 64
+    random_state: 42
+
 tmdb:
   timeout_seconds: 8
 
