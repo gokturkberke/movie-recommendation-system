@@ -33,11 +33,10 @@ py-modules = [
     "evaluation",
     "evaluation_runner",
     "preprocessing",
-    "recommenders",
     "tmdb_client",
     "training",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["experimental*"]
+include = ["experimental*", "recommenders*"]
