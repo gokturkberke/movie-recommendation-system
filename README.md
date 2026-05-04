@@ -50,10 +50,12 @@ This project is a comprehensive movie recommendation system that suggests person
     source .venv/bin/activate  # For Linux/macOS
     # .venv\Scripts\activate  # For Windows
     ```
-    Then, install the dependencies:
+    Then, install the dependencies and the project in editable mode:
     ```bash
     pip install -r requirements.txt
+    pip install -e .
     ```
+    The editable install exposes `src/` modules as top-level imports (e.g., `from data_access import ...`) so tests and scripts no longer need `sys.path` workarounds.
 3.  **Download the Dataset:**
     * Download the [MovieLens Latest Dataset](https://grouplens.org/datasets/movielens/latest/) (`ml-latest.zip`).
     * Extract the ZIP file and copy `links.csv`, `movies.csv`, `ratings.csv`, and `tags.csv` into the `data/` folder of your project.
