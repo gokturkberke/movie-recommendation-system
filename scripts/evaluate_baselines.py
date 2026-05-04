@@ -1,14 +1,8 @@
 import argparse
 import json
-import sys
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
-
-from config import EVALUATION_DEFAULTS, EVALUATION_OUTPUT_DIR  # noqa: E402
-from evaluation_runner import parse_k_values, run_evaluation  # noqa: E402
+from config import EVALUATION_DEFAULTS, EVALUATION_OUTPUT_DIR
+from evaluation_runner import parse_k_values, run_evaluation
 
 
 _SEMANTIC_DEFAULTS = EVALUATION_DEFAULTS.get("semantic") or {}

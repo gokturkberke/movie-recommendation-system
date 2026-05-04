@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "movie-rec"
+version = "0.1.0"
+description = "MovieLens recommendation system with content, hybrid, SVD, and semantic baselines, plus a Streamlit UI."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy<2",
+    "pandas",
+    "streamlit",
+    "scikit-learn",
+    "scikit-surprise",
+    "thefuzz",
+    "python-Levenshtein",
+    "requests",
+    "matplotlib",
+    "seaborn",
+    "scipy",
+    "PyYAML",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = [
+    "app",
+    "config",
+    "data_access",
+    "evaluation",
+    "evaluation_runner",
+    "preprocessing",
+    "recommenders",
+    "tmdb_client",
+    "training",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["experimental*"]

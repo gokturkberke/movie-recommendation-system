@@ -5,14 +5,10 @@ argparse wrapper.
 """
 
 import argparse
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from config import CLEANED_DATA_DIR, DATA_DIR  # noqa: E402
-from preprocessing import (  # noqa: E402
+from config import CLEANED_DATA_DIR, DATA_DIR
+from preprocessing import (
     DEFAULT_MIN_RATINGS_PER_MOVIE,
     DEFAULT_MIN_RATINGS_PER_USER,
     run_preprocessing,

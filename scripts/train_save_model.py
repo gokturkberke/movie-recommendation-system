@@ -5,14 +5,10 @@ argparse wrapper.
 """
 
 import argparse
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from config import CLEANED_DATA_DIR, SVD_MODEL_PATH  # noqa: E402
-from training import DEFAULT_RATING_SCALE, run_training  # noqa: E402
+from config import CLEANED_DATA_DIR, SVD_MODEL_PATH
+from training import DEFAULT_RATING_SCALE, run_training
 
 
 def build_arg_parser():
