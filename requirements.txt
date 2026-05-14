@@ -10,3 +10,5 @@ matplotlib
 seaborn
 scipy
 PyYAML
+sentence-transformers
+faiss-cpu

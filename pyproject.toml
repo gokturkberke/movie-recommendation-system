@@ -22,6 +22,8 @@ dependencies = [
     "seaborn",
     "scipy",
     "PyYAML",
+    "sentence-transformers",
+    "faiss-cpu",
 ]
 
 [tool.setuptools]

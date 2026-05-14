@@ -50,6 +50,11 @@ DEFAULT_CONFIG = {
             "components": 64,
             "random_state": 42,
         },
+        "sbert_faiss": {
+            "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+            "batch_size": 64,
+            "index_dir": "artifacts/indexes/sbert_faiss",
+        },
     },
     "tmdb": {
         "timeout_seconds": 8,
