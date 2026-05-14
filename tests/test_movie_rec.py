@@ -930,6 +930,7 @@ class TestMovieRecommendations(unittest.TestCase):
             "latency": {
                 "popularity": {"mean_ms": 1.25, "p95_ms": 2.5, "count": 5, "total_ms": 6.25}
             },
+            "svd_rating_prediction": {"rmse": 0.75, "mae": 0.50, "count": 8},
         }
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -939,12 +940,16 @@ class TestMovieRecommendations(unittest.TestCase):
             run_config = json.loads(Path(paths["run_config"]).read_text())
 
             self.assertEqual(csv_df.columns.tolist(), METRIC_CSV_COLUMNS)
-            self.assertEqual(csv_df["model"].tolist(), ["popularity", "popularity"])
-            self.assertEqual(csv_df["k"].tolist(), [5, 10])
+            self.assertEqual(csv_df["model"].tolist(), ["popularity", "popularity", "svd_rating_prediction"])
+            self.assertEqual(csv_df["k"].tolist(), [5, 10, 0])
             self.assertAlmostEqual(csv_df.loc[0, "precision_at_k"], 0.2)
             self.assertAlmostEqual(csv_df.loc[0, "latency_mean_ms"], 1.25)
             self.assertAlmostEqual(csv_df.loc[1, "latency_p95_ms"], 2.5)
+            self.assertAlmostEqual(csv_df.loc[2, "rmse"], 0.75)
+            self.assertAlmostEqual(csv_df.loc[2, "mae"], 0.50)
+            self.assertEqual(csv_df.loc[2, "rating_prediction_count"], 8)
             self.assertIn("popularity", json_text)
+            self.assertIn("svd_rating_prediction", json_text)
             self.assertEqual(run_config["max_users"], 5)
             self.assertTrue(Path(paths["metrics_csv_versioned"]).exists())
             self.assertTrue(Path(paths["metrics_json_versioned"]).exists())

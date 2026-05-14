@@ -42,6 +42,9 @@ METRIC_CSV_COLUMNS = [
     "novelty",
     "evaluated_user_count",
     "recommended_item_count",
+    "rmse",
+    "mae",
+    "rating_prediction_count",
     "latency_mean_ms",
     "latency_p95_ms",
 ]
@@ -357,9 +360,34 @@ def build_summary_rows(report):
                 "novelty": float(metrics.get("novelty", 0.0)),
                 "evaluated_user_count": int(metrics.get("evaluated_user_count", 0)),
                 "recommended_item_count": int(metrics.get("recommended_item_count", 0)),
+                "rmse": math.nan,
+                "mae": math.nan,
+                "rating_prediction_count": 0,
                 "latency_mean_ms": float(latency_summary.get("mean_ms", 0.0)) if latency_summary else 0.0,
                 "latency_p95_ms": float(latency_summary.get("p95_ms", 0.0)) if latency_summary else 0.0,
             })
+
+    svd_rating_prediction = report.get("svd_rating_prediction") or {}
+    if "count" in svd_rating_prediction:
+        rows.append({
+            "model": "svd_rating_prediction",
+            "k": 0,
+            "precision_at_k": 0.0,
+            "recall_at_k": 0.0,
+            "hit_rate_at_k": 0.0,
+            "ndcg_at_k": 0.0,
+            "catalog_coverage": 0.0,
+            "user_coverage": 0.0,
+            "diversity": 0.0,
+            "novelty": 0.0,
+            "evaluated_user_count": 0,
+            "recommended_item_count": 0,
+            "rmse": float(svd_rating_prediction.get("rmse", math.nan)),
+            "mae": float(svd_rating_prediction.get("mae", math.nan)),
+            "rating_prediction_count": int(svd_rating_prediction.get("count", 0)),
+            "latency_mean_ms": 0.0,
+            "latency_p95_ms": 0.0,
+        })
     return rows
 
 
