@@ -6,6 +6,7 @@ from evaluation_runner import parse_k_values, run_evaluation
 
 
 _SEMANTIC_DEFAULTS = EVALUATION_DEFAULTS.get("semantic") or {}
+_SBERT_FAISS_DEFAULTS = EVALUATION_DEFAULTS.get("sbert_faiss") or {}
 _DEFAULT_K_VALUES = EVALUATION_DEFAULTS.get("k_values") or [10]
 _DEFAULT_K_STR = ",".join(str(int(value)) for value in _DEFAULT_K_VALUES)
 
@@ -23,6 +24,8 @@ def build_arg_parser():
     parser.add_argument("--include-semantic", action="store_true", help="Evaluate the semantic content baseline (TF-IDF + TruncatedSVD LSA, watch-history seeds, max-similarity aggregation).")
     parser.add_argument("--semantic-components", type=int, default=int(_SEMANTIC_DEFAULTS.get("components", 64)), help="Latent dimensions for the semantic embedding index (TruncatedSVD).")
     parser.add_argument("--semantic-random-state", type=int, default=int(_SEMANTIC_DEFAULTS.get("random_state", 42)), help="Random state used by the semantic TruncatedSVD fit.")
+    parser.add_argument("--include-sbert-faiss", action="store_true", help="Evaluate the prebuilt SBERT+FAISS content baseline.")
+    parser.add_argument("--sbert-faiss-index-dir", default=_SBERT_FAISS_DEFAULTS.get("index_dir", "artifacts/indexes/sbert_faiss"), help="Directory containing prebuilt SBERT+FAISS artifacts.")
     parser.add_argument("--include-svd-topk", action="store_true", help="Evaluate SVD top-K recommendations from the trained Surprise model.")
     parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction (RMSE/MAE).")
     parser.add_argument("--no-measure-latency", action="store_true", help="Disable per-user latency measurement.")
@@ -47,6 +50,7 @@ def main():
         include_tfidf=args.include_tfidf,
         include_content=args.include_content,
         include_semantic=args.include_semantic,
+        include_sbert_faiss=args.include_sbert_faiss,
         include_svd_topk=args.include_svd_topk,
         include_svd=args.include_svd,
         measure_latency=not args.no_measure_latency,
@@ -54,6 +58,7 @@ def main():
         random_seed=args.random_seed,
         semantic_components=args.semantic_components,
         semantic_random_state=args.semantic_random_state,
+        sbert_faiss_index_dir=args.sbert_faiss_index_dir,
         example_count=args.example_count,
         include_reasons=args.include_reasons,
     )

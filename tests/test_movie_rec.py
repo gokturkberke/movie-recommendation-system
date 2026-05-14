@@ -151,6 +151,8 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertEqual(EVALUATION_DEFAULTS["k_values"], [5, 10, 20])
         self.assertEqual(EVALUATION_DEFAULTS["positive_threshold"], 4.0)
         self.assertEqual(EVALUATION_DEFAULTS["semantic"]["components"], 64)
+        self.assertEqual(EVALUATION_DEFAULTS["sbert_faiss"]["model_name"], "sentence-transformers/all-MiniLM-L6-v2")
+        self.assertEqual(EVALUATION_DEFAULTS["sbert_faiss"]["index_dir"], "artifacts/indexes/sbert_faiss")
         self.assertEqual(EVALUATION_OUTPUT_DIR.name, "evaluation")
         self.assertTrue(EVALUATION_OUTPUT_DIR.is_absolute())
 
