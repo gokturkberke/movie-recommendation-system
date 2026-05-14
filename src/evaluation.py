@@ -191,6 +191,8 @@ def top_n_metrics(
     recalls = []
     ndcgs = []
     hit_rates = []
+    maps = []
+    mrrs = []
     for user_id in evaluated_users:
         relevant_items = relevant_by_user[user_id]
         recommended_items = ranked.get(user_id, [])
@@ -199,6 +201,8 @@ def top_n_metrics(
         recalls.append(len(hits) / float(len(relevant_items)))
         hit_rates.append(1.0 if hits else 0.0)
         ndcgs.append(ndcg_at_k(recommended_items, relevant_items, k))
+        maps.append(average_precision_at_k(recommended_items, relevant_items, k))
+        mrrs.append(reciprocal_rank_at_k(recommended_items, relevant_items, k))
 
     catalog_size = infer_catalog_size(recommendations, holdout, train, movies, item_col)
     recommended_items = {
@@ -219,6 +223,8 @@ def top_n_metrics(
         "recall_at_k": mean(recalls),
         "ndcg_at_k": mean(ndcgs),
         "hit_rate_at_k": mean(hit_rates),
+        "map_at_k": mean(maps),
+        "mrr_at_k": mean(mrrs),
         "catalog_coverage": len(recommended_items) / float(catalog_size) if catalog_size else 0.0,
         "user_coverage": user_count_with_recommendations / float(len(evaluated_users)),
         "diversity": mean(intra_list_diversities(ranked, evaluated_users, movies, item_col, genres_col)),
@@ -255,6 +261,31 @@ def ndcg_at_k(recommended_items, relevant_items, k):
         return 0.0
     ideal_dcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
     return dcg / ideal_dcg
+
+
+def average_precision_at_k(recommended_items, relevant_items, k):
+    if not recommended_items or not relevant_items or k < 1:
+        return 0.0
+
+    score = 0.0
+    hit_count = 0
+    for rank, item_id in enumerate(recommended_items[:k], start=1):
+        if item_id in relevant_items:
+            hit_count += 1
+            score += hit_count / float(rank)
+
+    normalizer = min(len(relevant_items), k)
+    return score / float(normalizer) if normalizer else 0.0
+
+
+def reciprocal_rank_at_k(recommended_items, relevant_items, k):
+    if not recommended_items or not relevant_items or k < 1:
+        return 0.0
+
+    for rank, item_id in enumerate(recommended_items[:k], start=1):
+        if item_id in relevant_items:
+            return 1.0 / float(rank)
+    return 0.0
 
 
 def infer_catalog_size(recommendations, holdout, train, movies, item_col):
@@ -342,6 +373,8 @@ def empty_top_n_metrics(k):
         "recall_at_k": 0.0,
         "ndcg_at_k": 0.0,
         "hit_rate_at_k": 0.0,
+        "map_at_k": 0.0,
+        "mrr_at_k": 0.0,
         "catalog_coverage": 0.0,
         "user_coverage": 0.0,
         "diversity": 0.0,

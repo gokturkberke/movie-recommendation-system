@@ -16,10 +16,12 @@ from config import (
 )
 from data_access import latest_release_info, load_movies, load_ratings_for_stats, load_surprise_model
 from evaluation import (
+    average_precision_at_k,
     measure_per_user_latency,
     popularity_recommendations,
     random_recommendations,
     rating_prediction_metrics,
+    reciprocal_rank_at_k,
     summarize_latency,
     svd_topk_recommendations,
     temporal_train_test_split,
@@ -256,6 +258,8 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertAlmostEqual(metrics["recall_at_k"], 1.0)
         self.assertAlmostEqual(metrics["ndcg_at_k"], 1.0)
         self.assertAlmostEqual(metrics["hit_rate_at_k"], 1.0)
+        self.assertAlmostEqual(metrics["map_at_k"], 1.0)
+        self.assertAlmostEqual(metrics["mrr_at_k"], 1.0)
         self.assertAlmostEqual(metrics["catalog_coverage"], 0.6)
         self.assertAlmostEqual(metrics["user_coverage"], 1.0)
         self.assertAlmostEqual(metrics["diversity"], 1.0)
@@ -263,6 +267,26 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertAlmostEqual(metrics["serendipity"], 0.5)
         self.assertEqual(metrics["evaluated_user_count"], 2)
         self.assertEqual(metrics["recommended_item_count"], 3)
+
+    def test_map_and_mrr_return_zero_when_there_are_no_hits(self):
+        self.assertEqual(average_precision_at_k([3, 4], {1}, 2), 0.0)
+        self.assertEqual(reciprocal_rank_at_k([3, 4], {1}, 2), 0.0)
+
+    def test_map_and_mrr_score_first_item_hit(self):
+        self.assertEqual(average_precision_at_k([1, 2], {1}, 2), 1.0)
+        self.assertEqual(reciprocal_rank_at_k([1, 2], {1}, 2), 1.0)
+
+    def test_map_and_mrr_score_multiple_hits(self):
+        self.assertAlmostEqual(average_precision_at_k([3, 1, 2], {1, 2, 4}, 3), (1 / 2 + 2 / 3) / 3)
+        self.assertAlmostEqual(reciprocal_rank_at_k([3, 1, 2], {1, 2, 4}, 3), 0.5)
+
+    def test_map_and_mrr_handle_empty_recommendations(self):
+        self.assertEqual(average_precision_at_k([], {1}, 5), 0.0)
+        self.assertEqual(reciprocal_rank_at_k([], {1}, 5), 0.0)
+
+    def test_map_and_mrr_handle_k_larger_than_recommendation_list(self):
+        self.assertAlmostEqual(average_precision_at_k([2], {1, 2}, 5), 0.5)
+        self.assertEqual(reciprocal_rank_at_k([2], {1, 2}, 5), 1.0)
 
     def test_evaluation_runner_parses_unique_positive_k_values(self):
         self.assertEqual(parse_k_values("10, 5, 10"), [5, 10])
@@ -930,6 +954,8 @@ class TestMovieRecommendations(unittest.TestCase):
                         "recall_at_k": 0.4,
                         "hit_rate_at_k": 0.5,
                         "ndcg_at_k": 0.3,
+                        "map_at_k": 0.25,
+                        "mrr_at_k": 0.5,
                         "catalog_coverage": 0.1,
                         "user_coverage": 1.0,
                         "diversity": 0.6,
@@ -943,6 +969,8 @@ class TestMovieRecommendations(unittest.TestCase):
                         "recall_at_k": 0.5,
                         "hit_rate_at_k": 0.6,
                         "ndcg_at_k": 0.35,
+                        "map_at_k": 0.30,
+                        "mrr_at_k": 0.6,
                         "catalog_coverage": 0.15,
                         "user_coverage": 1.0,
                         "diversity": 0.55,
@@ -968,6 +996,8 @@ class TestMovieRecommendations(unittest.TestCase):
             self.assertEqual(csv_df["model"].tolist(), ["popularity", "popularity", "svd_rating_prediction"])
             self.assertEqual(csv_df["k"].tolist(), [5, 10, 0])
             self.assertAlmostEqual(csv_df.loc[0, "precision_at_k"], 0.2)
+            self.assertAlmostEqual(csv_df.loc[0, "map_at_k"], 0.25)
+            self.assertAlmostEqual(csv_df.loc[1, "mrr_at_k"], 0.6)
             self.assertAlmostEqual(csv_df.loc[0, "latency_mean_ms"], 1.25)
             self.assertAlmostEqual(csv_df.loc[1, "latency_p95_ms"], 2.5)
             self.assertAlmostEqual(csv_df.loc[2, "rmse"], 0.75)
