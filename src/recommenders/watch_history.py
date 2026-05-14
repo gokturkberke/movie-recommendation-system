@@ -1,6 +1,7 @@
 """Watch-history recommendations: aggregate per-seed candidates with hybrid rerank."""
 
 import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
 
 from config import CONTENT_CANDIDATE_POOL_SIZE, WATCH_HISTORY_WEIGHTS
 
@@ -12,7 +13,6 @@ from .common import (
     numeric_series,
     output_columns,
 )
-from .content import recommend_similar_movies_by_id
 from .hybrid import rerank_hybrid_candidates
 
 
@@ -113,6 +113,63 @@ def aggregate_watch_history_candidates(candidate_frames):
     return aggregated.drop(columns=["seed_movie_id"], errors="ignore")
 
 
+def content_positions_by_movie_id(movies_with_content):
+    if movies_with_content.empty or "movieId" not in movies_with_content.columns:
+        return {}
+
+    positions = {}
+    for position, movie_id in enumerate(movies_with_content["movieId"].tolist()):
+        if pd.isna(movie_id):
+            continue
+        positions[int(movie_id)] = position
+    return positions
+
+
+def watch_history_seed_candidate_frames(
+    watched_ids,
+    movies_with_content,
+    tfidf_matrix,
+    movies,
+    internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
+):
+    if tfidf_matrix is None or movies_with_content.empty:
+        return []
+
+    positions_by_movie_id = content_positions_by_movie_id(movies_with_content)
+    seed_positions = [
+        (movie_id, positions_by_movie_id[movie_id])
+        for movie_id in sorted(watched_ids)
+        if movie_id in positions_by_movie_id
+    ]
+    if not seed_positions:
+        return []
+
+    position_values = [position for _, position in seed_positions]
+    similarity_matrix = cosine_similarity(tfidf_matrix[position_values], tfidf_matrix)
+
+    candidate_frames = []
+    for row_index, (seed_movie_id, seed_position) in enumerate(seed_positions):
+        cosine_sim_vector = similarity_matrix[row_index]
+        similar_indices = cosine_sim_vector.argsort()[-(internal_candidate_count + 1) :][::-1]
+        similar_indices = [index for index in similar_indices if index != seed_position][:internal_candidate_count]
+        if not similar_indices:
+            continue
+
+        scores = movies_with_content.iloc[similar_indices][["movieId"]].copy()
+        scores["similarity_score"] = cosine_sim_vector[similar_indices]
+        recommendations = movies[movies["movieId"].isin(scores["movieId"])].copy()
+        recommendations = recommendations.merge(scores, on="movieId", how="left")
+        recommendations = filter_watched_movies(recommendations, watched_ids)
+        if recommendations.empty:
+            continue
+
+        recommendations = ensure_output_columns(recommendations, movies, ["similarity_score"])
+        recommendations["seed_movie_id"] = seed_movie_id
+        candidate_frames.append(recommendations.reset_index(drop=True))
+
+    return candidate_frames
+
+
 def recommend_based_on_watch_history_content(
     watched_movie_ids,
     movies_with_content,
@@ -126,22 +183,13 @@ def recommend_based_on_watch_history_content(
     if not watched_ids:
         return pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)
 
-    recommendation_frames = []
-    for seed_movie_id in watched_ids:
-        seed_recommendations, matched_title = recommend_similar_movies_by_id(
-            seed_movie_id,
-            movies_with_content,
-            tfidf_matrix,
-            movies,
-            watched_movie_ids=watched_ids,
-            movie_stats=movie_stats,
-            top_n=CONTENT_CANDIDATE_POOL_SIZE,
-            internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
-        )
-        if matched_title and not seed_recommendations.empty:
-            seed_recommendations = seed_recommendations.copy()
-            seed_recommendations["seed_movie_id"] = seed_movie_id
-            recommendation_frames.append(seed_recommendations)
+    recommendation_frames = watch_history_seed_candidate_frames(
+        watched_ids,
+        movies_with_content,
+        tfidf_matrix,
+        movies,
+        internal_candidate_count=CONTENT_CANDIDATE_POOL_SIZE,
+    )
 
     if not recommendation_frames:
         return pd.DataFrame(columns=columns + HYBRID_SCORE_COLUMNS)

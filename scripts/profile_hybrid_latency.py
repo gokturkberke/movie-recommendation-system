@@ -19,7 +19,6 @@ from recommenders import (
     build_tfidf_matrix,
     ensure_output_columns,
     filter_watched_movies,
-    find_movie_match_by_id,
     merge_hybrid_movie_stats,
     output_columns,
     prepare_hybrid_candidates,
@@ -59,57 +58,68 @@ def profile_hybrid_rerank(candidates, movie_stats, top_n, stages, prefix):
     return timed(stages, f"{prefix}_diversity_selection_ms", lambda: select_diverse_hybrid_candidates(reranked, top_n=top_n))
 
 
-def seed_recommendations_for_profile(
-    seed_movie_id,
+def seed_candidate_frames_for_profile(
+    seed_ids,
     movies_with_content,
     tfidf_matrix,
     movies,
     watched_ids,
-    movie_stats,
     stages,
 ):
-    match_index = timed(
+    if tfidf_matrix is None or movies_with_content.empty:
+        return []
+
+    def match_seed_positions():
+        positions_by_movie_id = {}
+        for position, movie_id in enumerate(movies_with_content["movieId"].tolist()):
+            if not pd.isna(movie_id):
+                positions_by_movie_id[int(movie_id)] = position
+        return [
+            (seed_movie_id, positions_by_movie_id[seed_movie_id])
+            for seed_movie_id in sorted(seed_ids)
+            if seed_movie_id in positions_by_movie_id
+        ]
+
+    seed_positions = timed(stages, "seed_matching_ms", match_seed_positions)
+    if not seed_positions:
+        return []
+
+    position_values = [position for _, position in seed_positions]
+    similarity_matrix = timed(
         stages,
-        "seed_matching_ms",
-        lambda: find_movie_match_by_id(seed_movie_id, movies_with_content),
+        "similarity_computation_ms",
+        lambda: cosine_similarity(tfidf_matrix[position_values], tfidf_matrix),
     )
-    if match_index is None:
-        return pd.DataFrame(columns=output_columns(movies) + HYBRID_SCORE_COLUMNS)
 
-    def compute_similarity():
-        match_position = movies_with_content.index.get_loc(match_index)
-        return match_position, cosine_similarity(tfidf_matrix[match_position], tfidf_matrix).flatten()
+    candidate_frames = []
+    for row_index, (seed_movie_id, seed_position) in enumerate(seed_positions):
+        cosine_sim_vector = similarity_matrix[row_index]
 
-    match_position, cosine_sim_vector = timed(stages, "similarity_computation_ms", compute_similarity)
+        def select_candidates():
+            similar_indices = cosine_sim_vector.argsort()[-(CONTENT_CANDIDATE_POOL_SIZE + 1) :][::-1]
+            return [index for index in similar_indices if index != seed_position][:CONTENT_CANDIDATE_POOL_SIZE]
 
-    def select_candidates():
-        similar_indices = cosine_sim_vector.argsort()[-(CONTENT_CANDIDATE_POOL_SIZE + 1) :][::-1]
-        return [index for index in similar_indices if index != match_position][:CONTENT_CANDIDATE_POOL_SIZE]
+        similar_indices = timed(stages, "candidate_selection_ms", select_candidates)
+        if not similar_indices:
+            continue
 
-    similar_indices = timed(stages, "candidate_selection_ms", select_candidates)
-    if not similar_indices:
-        return pd.DataFrame(columns=output_columns(movies) + HYBRID_SCORE_COLUMNS)
+        def merge_and_filter():
+            scores = movies_with_content.iloc[similar_indices][["movieId"]].copy()
+            scores["similarity_score"] = cosine_sim_vector[similar_indices]
+            recommendations = movies[movies["movieId"].isin(scores["movieId"])].copy()
+            recommendations = recommendations.merge(scores, on="movieId", how="left")
+            recommendations = filter_watched_movies(recommendations, watched_ids)
+            if recommendations.empty:
+                return recommendations
+            recommendations = ensure_output_columns(recommendations, movies, ["similarity_score"])
+            recommendations["seed_movie_id"] = seed_movie_id
+            return recommendations.reset_index(drop=True)
 
-    def merge_and_filter():
-        scores = movies_with_content.iloc[similar_indices][["movieId"]].copy()
-        scores["similarity_score"] = cosine_sim_vector[similar_indices]
-        recommendations = movies[movies["movieId"].isin(scores["movieId"])].copy()
-        recommendations = recommendations.merge(scores, on="movieId", how="left")
-        return filter_watched_movies(recommendations, watched_ids)
+        recommendations = timed(stages, "candidate_filtering_ms", merge_and_filter)
+        if not recommendations.empty:
+            candidate_frames.append(recommendations)
 
-    recommendations = timed(stages, "candidate_filtering_ms", merge_and_filter)
-    recommendations = profile_hybrid_rerank(
-        recommendations,
-        movie_stats,
-        top_n=CONTENT_CANDIDATE_POOL_SIZE,
-        stages=stages,
-        prefix="per_seed_rerank",
-    )
-    return timed(
-        stages,
-        "per_seed_output_shaping_ms",
-        lambda: ensure_output_columns(recommendations, movies, HYBRID_SCORE_COLUMNS).reset_index(drop=True),
-    )
+    return candidate_frames
 
 
 def profile_user(
@@ -134,22 +144,18 @@ def profile_user(
 
     seed_ids = timed(stages, "seed_selection_ms", select_seeds)
     watched_ids = set(int(movie_id) for movie_id in seed_ids)
-    candidate_frames = []
-
-    for seed_movie_id in seed_ids:
-        seed_frame = seed_recommendations_for_profile(
-            seed_movie_id,
+    candidate_frames = timed(
+        stages,
+        "candidate_generation_ms",
+        lambda: seed_candidate_frames_for_profile(
+            seed_ids,
             movies_with_content,
             tfidf_matrix,
             movies,
             watched_ids,
-            movie_stats,
             stages,
-        )
-        if not seed_frame.empty:
-            seed_frame = seed_frame.copy()
-            seed_frame["seed_movie_id"] = seed_movie_id
-            candidate_frames.append(seed_frame)
+        ),
+    )
 
     if candidate_frames:
         combined = timed(stages, "score_aggregation_ms", lambda: aggregate_watch_history_candidates(candidate_frames))

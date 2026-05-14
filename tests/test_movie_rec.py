@@ -684,6 +684,31 @@ class TestMovieRecommendations(unittest.TestCase):
         self.assertNotIn("Toy Story", recommendations["title"].tolist())
         self.assertEqual(len(recommendations["movieId"]), recommendations["movieId"].nunique())
 
+    def test_watch_history_hybrid_regression_with_multiple_seeds(self):
+        ratings = pd.DataFrame(
+            [
+                {"movieId": 2, "rating": 4.5},
+                {"movieId": 2, "rating": 4.0},
+                {"movieId": 4, "rating": 4.0},
+                {"movieId": 4, "rating": 3.5},
+            ]
+        )
+
+        recommendations = recommend_based_on_watch_history_content(
+            [1, 3],
+            self.movies_with_content,
+            self.tfidf_matrix,
+            self.movies,
+            movie_stats=build_movie_stats(ratings, min_rating_count=1),
+            top_n=3,
+        )
+
+        self.assertFalse(recommendations.empty)
+        self.assertTrue(set(recommendations["movieId"]).isdisjoint({1, 3}))
+        self.assertEqual(len(recommendations["movieId"]), recommendations["movieId"].nunique())
+        self.assertIn("final_score", recommendations.columns)
+        self.assertIn("watch_history_score", recommendations.columns)
+
     def test_svd_recommendations_use_fake_model_without_loading_real_model(self):
         ratings = pd.DataFrame(
             [
