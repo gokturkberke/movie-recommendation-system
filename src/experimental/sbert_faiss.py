@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,8 @@ class SbertFaissIndex:
 
 
 def require_sbert_faiss_dependencies():
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:

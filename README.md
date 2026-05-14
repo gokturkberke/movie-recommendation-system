@@ -108,6 +108,20 @@ The same script can compare every available baseline (random, popularity, pure T
 ```
 Results are written to `artifacts/evaluation/metrics_summary.{csv,json}` (gitignored). The Streamlit app is untouched.
 
+To build and evaluate the real SBERT + FAISS semantic baseline, first create the local index artifacts:
+```bash
+.venv/bin/python scripts/build_sbert_faiss_index.py \
+  --output-dir artifacts/indexes/sbert_faiss
+```
+For a quick smoke build, add `--sample-size 1000` and write to `/private/tmp/sbert_faiss_smoke`. Then evaluate the prebuilt index:
+```bash
+.venv/bin/python scripts/evaluate_baselines.py \
+  --max-users 5 --k 5 \
+  --include-sbert-faiss \
+  --sbert-faiss-index-dir artifacts/indexes/sbert_faiss
+```
+This is evaluation-only and does not build embeddings during Streamlit startup.
+
 ## 📖 Usage
 
 Once the application is running:
