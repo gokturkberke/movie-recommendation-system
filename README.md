@@ -23,6 +23,32 @@ This project is a comprehensive movie recommendation system that suggests person
 * **TMDB API Integration:**
     * Dynamically fetches movie posters and summaries to provide a rich visual experience. (Requires a TMDB API Key)
 
+## Implemented vs. Experimental
+
+Implemented in the Streamlit app:
+
+* TF-IDF content-based recommendations with hybrid reranking.
+* Surprise SVD collaborative filtering.
+* Mood-based recommendations.
+* Random movie picker.
+* MovieId-based watch history recommendations.
+* Optional TMDB poster and overview rendering.
+
+Implemented for offline evaluation only:
+
+* Popularity and random baselines.
+* Pure TF-IDF content baseline.
+* Hybrid watch-history content baseline.
+* Semantic-LSA baseline (`--include-semantic`), built from TF-IDF + TruncatedSVD.
+* SVD top-K and SVD rating prediction baselines.
+* SBERT + FAISS semantic baseline (`--include-sbert-faiss`) using prebuilt local index artifacts.
+
+Future work:
+
+* Streamlit UI integration for SBERT + FAISS.
+* LightFM / Implicit ALS / graph / sequence models.
+* Larger, repeated evaluation runs before claiming model quality improvements.
+
 ## 🛠️ Technologies and Libraries Used
 
 * **Programming Language:** Python 3.11
@@ -30,6 +56,7 @@ This project is a comprehensive movie recommendation system that suggests person
 * **Machine Learning and Recommendation Algorithms:**
     * Scikit-learn (TF-IDF, Cosine Similarity)
     * Surprise (SVD algorithm, model training, and evaluation)
+    * SentenceTransformers and FAISS for the optional SBERT semantic evaluation baseline
 * **Text Similarity:** TheFuzz (FuzzyWuzzy)
 * **Web Interface:** Streamlit
 * **API Interaction:** Requests
@@ -91,7 +118,9 @@ This project is a comprehensive movie recommendation system that suggests person
 * `src/`: Core Streamlit app, data access, TMDB client, recommendation logic, and evaluation helpers.
 * `scripts/`: Command-line orchestrators that call core functions from `src/`.
 * `tests/`: Unit and smoke tests.
+* `docs/`: Project roadmap, evaluation design, and generated-result interpretation.
 * `config/config.yaml`: Runtime parameters such as paths, candidate pool sizes, hybrid weights, mood mappings, menu labels, and demo profiles.
+* `artifacts/`: Local generated evaluation reports, SBERT embeddings, and FAISS indexes. These are gitignored.
 
 To run a small offline baseline evaluation:
 ```bash
@@ -121,6 +150,8 @@ For a quick smoke build, add `--sample-size 1000` and write to `/private/tmp/sbe
   --sbert-faiss-index-dir artifacts/indexes/sbert_faiss
 ```
 This is evaluation-only and does not build embeddings during Streamlit startup.
+
+Current local findings are summarized in `docs/08_evaluation_results_report.md`. In short: popularity is a strong simple baseline at K=10, hybrid content showed the best K=20 ranking signal in the documented run, and hybrid latency was later reduced substantially by batching watch-history candidate generation. Treat these as local directional results, not final benchmark claims.
 
 ## 📖 Usage
 

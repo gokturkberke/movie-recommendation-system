@@ -37,6 +37,8 @@ These artifacts are local/generated and are not tracked by git.
 - `recall_at_k`: share of relevant holdout items recovered in the top K.
 - `hit_rate_at_k`: whether at least one relevant holdout item appeared in the top K.
 - `ndcg_at_k`: ranking quality that rewards relevant hits near the top.
+- `map_at_k`: average precision up to K; rewards relevant items appearing early and multiple relevant hits.
+- `mrr_at_k`: reciprocal rank of the first relevant hit up to K.
 - `catalog_coverage`: share of the movie catalog reached by recommendations.
 - `user_coverage`: share of evaluated users that received recommendations.
 - `diversity`: genre-based intra-list diversity.
@@ -100,6 +102,14 @@ These values measure rating prediction error, not recommendation list quality.
 
 The hybrid path is orders of magnitude slower than the other baselines. This should be profiled before optimization. The likely cause is repeated per-seed content recommendation work in the watch-history hybrid flow.
 
+## Follow-Up Checkpoints
+
+After this report was first generated, the evaluation CSV/JSON schema was extended with `map_at_k` and `mrr_at_k`. The watch-history hybrid path was also optimized by batching seed similarity computation and deferring hybrid/diversity reranking until after candidate aggregation.
+
+Local five-user profiling before the optimization showed roughly 6.9 seconds mean per-user hybrid latency. After the optimization, the same profiler showed roughly 0.58 seconds mean per-user latency. A ten-user content-only evaluation smoke showed `hybrid_content` mean latency around 664 ms.
+
+A real SBERT + FAISS evaluation baseline was also added behind `--include-sbert-faiss`. A 1,000-row smoke index produced `sbert_faiss_content` rows successfully, but this is not a full-catalog benchmark. Build full SBERT + FAISS artifacts before comparing it against the other baselines.
+
 ## Conclusions
 
 - The evaluation flow now covers every currently available baseline.
@@ -108,7 +118,7 @@ The hybrid path is orders of magnitude slower than the other baselines. This sho
 - `semantic_content` currently means semantic-LSA, not real SBERT/FAISS, and did not produce hits in this run.
 - `svd_topk` produced one K=20 hit pattern but did not beat hybrid or popularity.
 - SVD rating prediction works and has RMSE 0.7241 / MAE 0.5097 on the sampled holdout.
-- The next technical priority should be hybrid latency profiling before any optimization.
+- The next technical priority should be regenerating a full post-optimization report before making model-quality claims.
 
 ## Caveats
 
