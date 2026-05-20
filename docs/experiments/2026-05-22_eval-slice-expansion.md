@@ -1,0 +1,192 @@
+- **Date:** 2026-05-22
+- **Topic:** Eval slice expansion and multi-seed variance bounds for the top-N comparison table
+- **Motivation:** The 2026-05-21 ALS investigation landed in `cb5e4dc` with `als_implicit` at NDCG@10 = 0.1765, hit_rate@10 = 0.3091, and mean latency 7.1 ms -- the clear winner on every relevance metric and simultaneously the fastest. The same plan's Caveats section flags two known limitations: (a) 55 of 100 selected users had a positive holdout, still a small slice, and (b) the artifact-level training-set leakage shared between ALS and LightFM (both trained on the full rating matrix). The user explicitly picked "eval slice expansion" as the next phase to validate whether ALS leadership is a stable signal or a one-seed / small-N artifact. Phase 1 exploration also surfaced a structural issue: `select_evaluation_user_ids` is deterministic (sorted-userId first-N), and every artifact is pre-trained, so the existing `--random-seed` only varies the `random` baseline -- a naive multi-seed run would produce no variance for any informative model.
+- **Hypothesis:**
+  - **H1 (seed robustness):** Across `--user-sample-seed` in `{42, 7, 1337}` at `--max-users 100 --holdout-count 1`, the ordering `als_implicit > lightfm_warp > hybrid_content` on NDCG@10 holds in 3 of 3 runs, with `std(NDCG@10) / mean(NDCG@10)` for each of the three models below 0.30 (less than 30% relative variation across seeds).
+  - **H2 (sample-size robustness):** At `--max-users 300 --user-sample-seed 42 --holdout-count 1`, the same `als_implicit > lightfm_warp > hybrid_content` ordering holds. Evaluated user count reaches at least 150.
+  - **H3 (holdout-shape robustness):** Across `--user-sample-seed` in `{42, 7, 1337}` at `--max-users 300 --holdout-count 3`, the same ordering on NDCG@10 holds in 3 of 3 runs. We do not predict the absolute numbers because the recall denominator changes; we predict the ordering.
+  - Refutation of any of these would not invalidate the previous plan's fix -- it would change how ALS leadership is framed in the report (from "the clear winner" to "the leading model on the canonical slice; ordering is sample-dependent").
+- **Preconditions:**
+  - All four items of `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` are DONE on `main` through commit `8d5d5d3`.
+  - `artifacts/evaluation/metrics_summary_2026-05-20T18-47-21Z.{csv,json}` is the canonical 2026-05-21 reference; new runs sit alongside as timestamped copies.
+  - `artifacts/models/{als,lightfm}/` and `artifacts/indexes/sbert_faiss/` are present locally with the same artifacts the 2026-05-21 plan used. No retraining in this plan.
+  - `cleaned_data/ratings_clean.csv`, `cleaned_data/movies_clean.csv`, `cleaned_data/svd_trained_model.pkl` present.
+  - CLAUDE.md section 7 governs DONE marker structure; do not fill `<hash>` placeholders before the corresponding commit lands.
+
+## 1) Add user-sampling seed plumbing
+
+- **Goal:** Make the user sampling step accept an optional random seed. Default behavior stays the deterministic first-N slice so every prior run reproduces.
+- **Files:**
+  - `src/evaluation_runner.py:86-101` (`select_evaluation_user_ids`): add `random_seed=None` keyword parameter. When `random_seed` is not None, sample `max_users` without replacement from the eligible-user list using `np.random.default_rng(random_seed).choice(...)`. When `None`, preserve the current `[:max_users]` first-N slice.
+  - `src/evaluation_runner.py` (`run_evaluation` orchestration, the call to `select_evaluation_user_ids`): add `user_sample_seed` parameter to `run_evaluation()`, forward it into the call, and persist it in the run config block so the JSON / `run_config.json` artifact records it.
+  - `scripts/evaluate_baselines.py`: add `--user-sample-seed` argument (separate from `--random-seed`, which stays for the `random` baseline). Default value: omit (None). Forward to `run_evaluation(user_sample_seed=...)`.
+  - `tests/test_evaluation_runner.py` (new file, target ~60 lines):
+    - `test_select_evaluation_user_ids_default_is_deterministic_first_n`: ratings with eligible userIds `[10, 20, 30, 40, 50]`, `max_users=3`, no seed -> returns `[10, 20, 30]`.
+    - `test_select_evaluation_user_ids_with_seed_returns_stable_random_sample`: same ratings, `random_seed=42`, returns the same 3 userIds on two consecutive calls. The sample is a strict subset of the eligible pool, and is not the first-N slice (the test verifies the result is different from the deterministic one).
+    - `test_select_evaluation_user_ids_seed_subsamples_within_eligible`: eligible pool of 5 users, `max_users=3`, `random_seed=7` -> returned set is a 3-element subset of the 5 eligible.
+- **Reuse:** `np.random.default_rng(seed).choice(array, size, replace=False)` -- the same call shape used in `src/evaluation.py:417,430`. No new dependencies.
+- **Steps:**
+  - Make the function and CLI edits.
+  - Add the test file (or extend an existing test file -- there is no `tests/test_evaluation_runner.py` yet; create it).
+  - `.venv/bin/python -m unittest tests.test_evaluation_runner` -- must pass.
+  - `.venv/bin/python -m unittest discover -s tests` -- must stay at 60+ (item adds 3 tests, the prior baseline was 57).
+  - Quick CLI sanity:
+    ```bash
+    .venv/bin/python scripts/evaluate_baselines.py --max-users 5 --k 5 --include-random --user-sample-seed 42 --output-dir /private/tmp/seed_sanity
+    ```
+    Verify the JSON has `config.user_sample_seed == 42`.
+  - Commit message: `feat(eval): add random user sampling for variance studies`. Use `git add -f docs/experiments/2026-05-22_eval-slice-expansion.md` to land the DONE marker.
+- **Test / verification:**
+  - All three new unit tests pass.
+  - Full suite stays green.
+  - 5-user CLI smoke produces a JSON with `config.user_sample_seed = 42`.
+  - The 2026-05-21 canonical command (without `--user-sample-seed`) still produces the same 55 evaluated_user_count for the K=10 / als_implicit row -- backward compatibility check.
+- **Expected outcome:** The eval flow can now produce real variance when seeded. Decision criterion: tests pass, default behavior unchanged.
+- **DONE / DROPPED:**
+
+## 2) Multi-seed run at 100 users / holdout=1
+
+- **Goal:** Produce variance numbers for the top-3 ranking models on the same slice size as the current canonical reference.
+- **Files:**
+  - `artifacts/evaluation/metrics_summary_<timestamp>.{csv,json}` (3 new files, gitignored).
+  - `artifacts/evaluation/metrics_summary.{csv,json}` and `run_config.json` are overwritten by each run; this is acceptable because the timestamped copies preserve history. After the third run, `metrics_summary.{csv,json}` points to the seed=1337 run.
+- **Steps:**
+  - For seed in `42, 7, 1337`, run:
+    ```bash
+    .venv/bin/python scripts/evaluate_baselines.py \
+      --max-users 100 --k 5,10,20 \
+      --include-random --include-tfidf --include-content --include-semantic \
+      --include-svd --include-svd-topk \
+      --include-sbert-faiss --sbert-faiss-index-dir artifacts/indexes/sbert_faiss \
+      --include-lightfm --lightfm-artifacts-dir artifacts/models/lightfm \
+      --include-als --als-artifacts-dir artifacts/models/als \
+      --user-sample-seed <seed> \
+      --output-dir artifacts/evaluation
+    ```
+  - After each run, capture the new timestamped JSON path from the artifacts directory listing.
+  - Commit message: `chore(eval): capture 100-user 3-seed variance run artifacts`. Use `git add -f` for the plan file (the artifacts themselves are gitignored; the commit lands the DONE marker only).
+- **Test / verification:**
+  - Three timestamped JSONs exist under `artifacts/evaluation/`, each with `config.user_sample_seed` set to 42, 7, 1337 respectively.
+  - For at least 2 of the 3 runs, `top_n.als_implicit.10.evaluated_user_count` differs from the canonical 55 -- proof the slice actually shifted.
+  - The DONE marker captures, for each seed: `evaluated_user_count`, `als_implicit.10.{precision,recall,ndcg,hit_rate}`, `lightfm_warp.10.{ndcg,hit_rate}`, `hybrid_content.10.{ndcg,hit_rate}`.
+- **Expected outcome:** A 3-run dataset for hypothesis H1. Decision criterion: artifacts exist; the three seed-specific evaluated_user_counts are not all identical.
+- **DONE / DROPPED:**
+
+## 3) Single-seed run at 300 users / holdout=1
+
+- **Goal:** Isolate the "larger sample" effect from the "larger holdout" effect that item 4 introduces.
+- **Files:**
+  - `artifacts/evaluation/metrics_summary_<timestamp>.{csv,json}` (1 new file, gitignored).
+- **Steps:**
+  - Run:
+    ```bash
+    .venv/bin/python scripts/evaluate_baselines.py \
+      --max-users 300 --k 5,10,20 \
+      --include-random --include-tfidf --include-content --include-semantic \
+      --include-svd --include-svd-topk \
+      --include-sbert-faiss --sbert-faiss-index-dir artifacts/indexes/sbert_faiss \
+      --include-lightfm --lightfm-artifacts-dir artifacts/models/lightfm \
+      --include-als --als-artifacts-dir artifacts/models/als \
+      --user-sample-seed 42 \
+      --output-dir artifacts/evaluation
+    ```
+  - Capture the new timestamped JSON path.
+  - Commit message: `chore(eval): capture 300-user single-seed run artifact`.
+- **Test / verification:**
+  - One timestamped JSON with `config.max_users = 300`, `config.user_sample_seed = 42`, `config.holdout_count = 1`.
+  - `data.evaluated_user_count` reaches at least 150 (~ 55% of 300 expected based on the 100-user rate).
+  - DONE marker captures evaluated_user_count and the same per-model K=10 metrics as item 2.
+- **Expected outcome:** A reference point that separates "more users" from "more holdout". Decision criterion: ordering of als > lightfm > hybrid on NDCG@10 holds, or the deviation is documented.
+- **DONE / DROPPED:**
+
+## 4) Multi-seed run at 300 users / holdout=3
+
+- **Goal:** Variance band on the most realistic offline eval shape: more users, more holdout, three seeds. This is the expensive one (~30-45 min per run).
+- **Files:**
+  - `artifacts/evaluation/metrics_summary_<timestamp>.{csv,json}` (3 new files, gitignored).
+- **Steps:**
+  - For seed in `42, 7, 1337`, run:
+    ```bash
+    .venv/bin/python scripts/evaluate_baselines.py \
+      --max-users 300 --k 5,10,20 \
+      --holdout-count 3 \
+      --include-random --include-tfidf --include-content --include-semantic \
+      --include-svd --include-svd-topk \
+      --include-sbert-faiss --sbert-faiss-index-dir artifacts/indexes/sbert_faiss \
+      --include-lightfm --lightfm-artifacts-dir artifacts/models/lightfm \
+      --include-als --als-artifacts-dir artifacts/models/als \
+      --user-sample-seed <seed> \
+      --output-dir artifacts/evaluation
+    ```
+  - Commit message: `chore(eval): capture 300-user holdout=3 3-seed variance run artifacts`.
+- **Test / verification:**
+  - Three timestamped JSONs with `config.max_users = 300`, `config.holdout_count = 3`, distinct `user_sample_seed`.
+  - `recall_at_10` numbers are mechanically smaller than items 2 and 3 (denominator is 3 instead of 1); the plan acknowledges this in item 5's paragraph.
+  - DONE marker captures per-seed evaluated_user_count and the same per-model K=10 metrics for the three runs.
+- **Expected outcome:** A 3-run dataset for hypothesis H3. Decision criterion: artifacts exist; the holdout=3 semantics is correctly noted in the synthesis.
+- **DONE / DROPPED:**
+
+## 5) Synthesis -- "Variance Bounds" subsection in the evaluation report
+
+- **Goal:** Translate the seven runs from items 2-4 into a readable summary block in `docs/08_evaluation_results_report.md`, then update Conclusions and Caveats to match.
+- **Files:**
+  - `docs/08_evaluation_results_report.md`: insert a new top-level subsection `## Variance Bounds (multi-seed slice studies)` between "Why SVD top-K stays at zero hits" and "Conclusions". Three sub-tables:
+    - **Table A -- 100-user / holdout=1, 3 seeds:** for each of `als_implicit`, `lightfm_warp`, `hybrid_content`, `popularity`, `sbert_faiss_content`, columns are `NDCG@10 mean ± std`, `hit_rate@10 mean ± std`, `latency_mean_ms mean ± std`. One short paragraph after the table noting which models' orderings stay stable across seeds.
+    - **Table B -- 300-user / holdout=1, single seed (42):** one row per model, columns `NDCG@10`, `hit_rate@10`, `latency_mean_ms`. One short paragraph comparing to Table A.
+    - **Table C -- 300-user / holdout=3, 3 seeds:** same structure as Table A. One short paragraph noting the recall denominator change and which orderings still hold.
+  - Update the existing Conclusions block:
+    - Soften "the clear winner on every relevance metric" to something like "leads the canonical 100-user latest-1 slice and remains on top in <X> of <Y> multi-seed runs."
+    - Add a sentence: "Audit: `docs/experiments/2026-05-22_eval-slice-expansion.md`."
+  - Update Caveats: add a single line `Holdout = 3 expansion changes the recall denominator; recall numbers across holdout=1 and holdout=3 runs are not directly comparable.`
+  - This plan file: fill DONE marker referencing the canonical synthesis commit.
+- **Steps:**
+  - Pull the seven JSON files' per-model `top_n.{model}.10.{ndcg_at_k, hit_rate_at_k}` and `latency.{model}.mean_ms` into a small Python one-liner to compute mean/std (do not commit the helper script; this is one-off arithmetic).
+  - Write the three tables and the three short paragraphs.
+  - Update Conclusions and Caveats per above.
+  - Commit message: `docs(eval): add variance bounds subsection from multi-seed slice studies`. Use `git add -f` for both the report and this plan file.
+- **Test / verification:**
+  - The new subsection exists with three tables filled from real numbers.
+  - For each of the three top-3 models, mean ± std appears in Tables A and C.
+  - The Conclusions block's "clear winner" language is replaced with the variance-aware framing.
+  - No code is touched in this item.
+  - `.venv/bin/python -m unittest discover -s tests` still green (unaffected -- doc-only).
+- **Expected outcome:** A defensible variance picture readable in 60 seconds. Decision criterion: the three tables agree with the seven run JSONs row-by-row.
+- **DONE / DROPPED:**
+
+## Deferred / Future (out of this plan)
+
+- **Leave-one-out artifact retraining (leakage fix).** Both ALS and LightFM artifacts were trained on the full rating matrix including the holdout interactions, so the absolute NDCG numbers are inflated. A tighter offline evaluation would train per-fold artifacts that exclude the holdout. That is multi-hour compute and lives in a separate plan once variance bounds settle whether retraining is worth the cost.
+- **Per-model hyperparameter sweeps.** LightFM `no_components x loss x epochs`; ALS `factors x regularization x alpha`. Plan once the variance work establishes whether the current single-point hyperparameters are near the Pareto.
+- **Cold-start segmentation.** Metrics broken down by user history size (e.g., `<10`, `10-50`, `50-200`, `>200` train interactions). Natural follow-on after variance bounds are known.
+- **UI explainability (Roadmap Priority 5).** Streamlit "why this movie?" feature on the Content-Based and Watch History pages. Separate plan, independent of eval track.
+- **LightGCN / SASRec (Roadmap Priority 6).** Modern graph / sequential models. Plan once classical CF variance bounds are established.
+- **SVD top-K ranking improvement.** Documented as known algorithmic limitation in `docs/08_evaluation_results_report.md`; a future plan can explore predicted_score blended with log-popularity, or a learning-to-rank reranker.
+
+## Critical Files (Reference)
+
+- `src/evaluation_runner.py:86-101` -- `select_evaluation_user_ids`; item 1 adds the optional `random_seed` parameter.
+- `src/evaluation_runner.py:559-610` -- `run_evaluation` orchestration; item 1 forwards `user_sample_seed`.
+- `scripts/evaluate_baselines.py` -- argparse + main; item 1 adds the new CLI flag.
+- `tests/test_evaluation_runner.py` -- new file in item 1 (3 unit tests).
+- `src/evaluation.py:417,430` -- existing `np.random.default_rng(seed).choice(...)` usage in `random_recommendations`; the new code mirrors this shape.
+- `artifacts/evaluation/metrics_summary_2026-05-20T18-47-21Z.{csv,json}` -- 2026-05-21 canonical reference; items 2-4 sit alongside it.
+- `artifacts/models/{als,lightfm}/` and `artifacts/indexes/sbert_faiss/` -- pre-trained artifacts; not modified.
+- `docs/08_evaluation_results_report.md` -- item 5 adds the Variance Bounds subsection.
+- `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` -- prior plan; this plan's motivation references its DONE markers.
+
+## End-to-End Verification Sequence
+
+1. Item 1 complete: `tests.test_evaluation_runner` passes 3/3; full suite stays >=60; a 5-user CLI smoke shows `config.user_sample_seed = 42` in the output JSON. DONE marker carries a real commit hash.
+2. Item 2 complete: three timestamped JSONs with seeds 42, 7, 1337; at least 2 of 3 evaluated_user_counts differ from 55. DONE marker carries a real commit hash and the per-seed K=10 metric triples.
+3. Item 3 complete: one timestamped JSON with `max_users=300`, `evaluated_user_count >= 150`. DONE marker carries a real commit hash and the K=10 metric triple.
+4. Item 4 complete: three timestamped JSONs with `max_users=300`, `holdout_count=3`, distinct seeds. DONE marker carries a real commit hash and the per-seed K=10 metric triples.
+5. Item 5 complete: `docs/08_evaluation_results_report.md` has the "Variance Bounds" subsection with three filled tables; Conclusions and Caveats reworded. DONE marker carries the synthesis commit hash.
+6. After every commit, record the real commit hash in this plan file; CLAUDE.md section 7 forbids leaving temporary hash placeholders in place.
+
+## Execution Notes
+
+- This file is the contract; CLAUDE.md and AGENTS.md in the repo root are the project-wide rules.
+- `/docs` is gitignored, but tracked files under `docs/` (including this plan) still need `git add -f` on commits.
+- Items are sequential: item 1 is a hard prerequisite for items 2-4 (without the new flag, multi-seed runs produce no variance); items 2-4 are reads-only against pre-trained artifacts; item 5 synthesizes from items 2-4 outputs.
+- One implementation commit per item, plus a follow-up `docs(experiments): record ...` commit that fills the DONE marker with the real hash. This matches the 2026-05-21 cadence.
+- The artifact files under `artifacts/evaluation/metrics_summary_*` are gitignored; the commits land only the plan file and (for item 1 and item 5) source / doc changes.

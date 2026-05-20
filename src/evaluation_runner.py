@@ -6,6 +6,7 @@ from pathlib import Path
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+import numpy as np
 import pandas as pd
 
 from config import EVALUATION_DEFAULTS, project_path
@@ -89,16 +90,22 @@ def select_evaluation_user_ids(
     min_interactions=2,
     holdout_count=1,
     user_col="userId",
+    random_seed=None,
 ):
     if ratings.empty or user_col not in ratings.columns:
         return []
 
     min_required = max(min_interactions, holdout_count + 1)
     interaction_counts = ratings.groupby(user_col).size()
-    user_ids = interaction_counts[interaction_counts >= min_required].sort_index().index.tolist()
-    if max_users and max_users > 0:
-        user_ids = user_ids[:max_users]
-    return user_ids
+    eligible_ids = interaction_counts[interaction_counts >= min_required].sort_index().index.tolist()
+    if not max_users or max_users <= 0:
+        return eligible_ids
+    if random_seed is None:
+        return eligible_ids[:max_users]
+    take = min(int(max_users), len(eligible_ids))
+    rng = np.random.default_rng(int(random_seed))
+    sampled = rng.choice(np.asarray(eligible_ids), size=take, replace=False)
+    return sorted(int(value) for value in sampled.tolist())
 
 
 def filter_to_users(frame, user_ids, user_col="userId"):
@@ -574,6 +581,7 @@ def run_evaluation(
     measure_latency=True,
     output_dir=None,
     random_seed=42,
+    user_sample_seed=None,
     semantic_components=64,
     semantic_random_state=42,
     sbert_faiss_index_dir=None,
@@ -595,6 +603,7 @@ def run_evaluation(
         max_users=max_users,
         min_interactions=min_interactions,
         holdout_count=holdout_count,
+        random_seed=user_sample_seed,
     )
     sampled_ratings = filter_to_users(ratings, selected_user_ids)
     train, holdout = temporal_train_test_split(
@@ -682,6 +691,7 @@ def run_evaluation(
             "include_svd": bool(include_svd),
             "measure_latency": bool(measure_latency),
             "random_seed": int(random_seed),
+            "user_sample_seed": None if user_sample_seed is None else int(user_sample_seed),
             "semantic_components": int(semantic_components),
             "semantic_random_state": int(semantic_random_state),
             "semantic_method": "tfidf+truncated_svd" if include_semantic else None,

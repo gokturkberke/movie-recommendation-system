@@ -39,6 +39,7 @@ def build_arg_parser():
     parser.add_argument("--include-svd", action="store_true", help="Evaluate SVD holdout rating prediction (RMSE/MAE).")
     parser.add_argument("--no-measure-latency", action="store_true", help="Disable per-user latency measurement.")
     parser.add_argument("--random-seed", type=int, default=int(EVALUATION_DEFAULTS.get("random_seed", 42)), help="Seed used by the random baseline.")
+    parser.add_argument("--user-sample-seed", type=int, default=None, help="Optional seed for random user-pool sampling. When unset, the eligible-user list is taken first-N (deterministic, backward compatible).")
     parser.add_argument("--output-dir", default=str(EVALUATION_OUTPUT_DIR), help="Directory for metrics_summary.json/csv. Use empty string to disable saving.")
     parser.add_argument("--example-count", type=int, default=0, help="Include this many recommendation examples.")
     parser.add_argument("--include-reasons", action="store_true", help="Include hybrid explanation text in examples.")
@@ -67,6 +68,7 @@ def main():
         measure_latency=not args.no_measure_latency,
         output_dir=output_dir,
         random_seed=args.random_seed,
+        user_sample_seed=args.user_sample_seed,
         semantic_components=args.semantic_components,
         semantic_random_state=args.semantic_random_state,
         sbert_faiss_index_dir=args.sbert_faiss_index_dir,
