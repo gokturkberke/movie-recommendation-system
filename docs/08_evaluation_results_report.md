@@ -173,16 +173,68 @@ Evaluated user counts: 259, 245, 265. Recall denominators change at holdout=3 (e
 
 `als_implicit > lightfm_warp` holds again in 3 of 3 seeds. ALS HitRate@10 nearly doubles (0.32 -> 0.50 mean) because the holdout window widened from 1 to 3; the ratio between models in this column stays stable. The hybrid recommender's #3 placement does not survive -- `popularity` and `tfidf_content` (not shown in this table but easily checked in the artifacts) both beat `hybrid_content` on NDCG@10 in all three seeds. This is the most reliable shape in the study and the place where `hybrid_content` is most clearly outranked.
 
+## Cold-start segmentation (user-history buckets)
+
+Building on the 300-user / holdout=3 multi-seed runs above, `docs/experiments/2026-05-23_cold-start-segmentation.md` re-ran the same three seeds with `--segment-by-history`, partitioning each run's evaluated users into four buckets by their train-interaction count: `cold_0_10` (n < 10), `warm_10_50` (10 <= n < 50), `regular_50_200` (50 <= n < 200), `heavy_200_plus` (n >= 200). Bucket sizes were stable across seeds (cold ~44, warm ~111, regular ~69, heavy ~32 per seed). Entries below are NDCG@10 / HitRate@10 reported as `mean +/- std` across seeds {42, 7, 1337}.
+
+### Cold (n < 10, mean ~44 users per seed)
+
+| Model | NDCG@10 | HitRate@10 |
+|---|---:|---:|
+| als_implicit | 0.4610 +/- 0.0743 | 0.7577 +/- 0.0194 |
+| lightfm_warp | 0.2701 +/- 0.0378 | 0.5161 +/- 0.0328 |
+| popularity | 0.0876 +/- 0.0423 | 0.2072 +/- 0.0803 |
+| hybrid_content | 0.0585 +/- 0.0079 | 0.1473 +/- 0.0845 |
+| tfidf_content | 0.0562 +/- 0.0266 | 0.1244 +/- 0.0830 |
+| sbert_faiss_content | 0.0394 +/- 0.0148 | 0.1077 +/- 0.0560 |
+
+### Warm (10 <= n < 50, mean ~111 users per seed)
+
+| Model | NDCG@10 | HitRate@10 |
+|---|---:|---:|
+| als_implicit | 0.2820 +/- 0.0618 | 0.5880 +/- 0.0950 |
+| lightfm_warp | 0.1328 +/- 0.0308 | 0.3531 +/- 0.1123 |
+| popularity | 0.0415 +/- 0.0096 | 0.1202 +/- 0.0122 |
+| hybrid_content | 0.0365 +/- 0.0102 | 0.1111 +/- 0.0204 |
+| tfidf_content | 0.0318 +/- 0.0055 | 0.1055 +/- 0.0099 |
+| sbert_faiss_content | 0.0184 +/- 0.0095 | 0.0682 +/- 0.0234 |
+
+### Regular (50 <= n < 200, mean ~69 users per seed)
+
+| Model | NDCG@10 | HitRate@10 |
+|---|---:|---:|
+| als_implicit | 0.1174 +/- 0.0442 | 0.3351 +/- 0.0949 |
+| lightfm_warp | 0.0562 +/- 0.0154 | 0.2074 +/- 0.0458 |
+| tfidf_content | 0.0370 +/- 0.0179 | 0.0967 +/- 0.0350 |
+| popularity | 0.0247 +/- 0.0104 | 0.0721 +/- 0.0139 |
+| hybrid_content | 0.0201 +/- 0.0094 | 0.0676 +/- 0.0364 |
+| sbert_faiss_content | 0.0140 +/- 0.0057 | 0.0481 +/- 0.0080 |
+
+### Heavy (n >= 200, mean ~32 users per seed)
+
+| Model | NDCG@10 | HitRate@10 |
+|---|---:|---:|
+| als_implicit | 0.0663 +/- 0.0364 | 0.1887 +/- 0.0390 |
+| lightfm_warp | 0.0362 +/- 0.0072 | 0.1152 +/- 0.0511 |
+| sbert_faiss_content | 0.0244 +/- 0.0143 | 0.0533 +/- 0.0214 |
+| popularity | 0.0184 +/- 0.0132 | 0.0644 +/- 0.0357 |
+| tfidf_content | 0.0140 +/- 0.0136 | 0.0413 +/- 0.0361 |
+| hybrid_content | 0.0103 +/- 0.0065 | 0.0425 +/- 0.0210 |
+
+**Who wins each segment.** `als_implicit > lightfm_warp` in every segment in 3 of 3 seeds (12 of 12 segment-seed cells). The third-rank position is segment-dependent: `popularity` is third in cold; `popularity` and `hybrid_content` tie within one std in warm; `tfidf_content` rises to third in regular; `sbert_faiss_content` rises to third in heavy. So the "third spot is a tossup" finding from the Variance Bounds section above sharpens here -- the actual third-place model **changes by user-history bucket**.
+
+**Why both CF models invert classical wisdom (the leakage signature).** Textbook expectation is that ALS and LightFM are weak at cold-start and strong on heavy users (where they have the most behavior signal). The opposite happens here: both models' NDCG@10 falls monotonically from cold to heavy (ALS 0.46 -> 0.07; LightFM 0.27 -> 0.04). The most likely explanation is the artifact-level training-set leakage already noted in the Caveats: both artifacts were trained on the full rating matrix including each eval user's holdout interactions. For cold users, their "true" preference signal lives almost entirely in the holdout, so the artifact has effectively memorized exactly the items the eval will hold out. For heavy users, the holdout is a smaller fraction of their full history and there is more diversity in the remaining behavior, so the memorization advantage shrinks. This makes the segmented orderings defensible -- both models share the leakage symmetrically -- but the absolute cold-start numbers are inflated. A leave-one-out retrain (logged in the audit plan's Deferred section) is the right next step before quoting these absolute numbers in any external setting.
+
 ## Conclusions
 
 - The evaluation flow covers 9 top-N models. The ALS exclusion-semantics fix from `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` item 2 is applied in every run.
-- `als_implicit` is the leading ranker. On the canonical 100-user latest-1 deterministic slice it tops every relevance metric; in the multi-seed slice studies above (`docs/experiments/2026-05-22_eval-slice-expansion.md`) it stays on top in 3 of 3 seeds at 100 users / holdout=1, in the 300-user single-seed run, and in 3 of 3 seeds at 300 users / holdout=3. It is simultaneously the fastest model at ~7 ms mean latency.
-- `lightfm_warp` is the runner-up on every shape tested. The gap to ALS is wide enough to be robust (ALS NDCG@10 ~2x LightFM across all four study groups). Latency stays in the ~40 ms fast tier.
-- The third-best ranker is **not stable**. On the canonical slice the report previously called this `hybrid_content`, but the variance work shows `popularity`, `tfidf_content`, and `hybrid_content` are within one standard deviation of each other at 100 users / holdout=1, and `popularity` and `tfidf_content` both beat `hybrid_content` at 300 users / holdout=3. Treat the lower tier as a tossup rather than a fixed ordering.
+- `als_implicit` is the leading ranker on every studied shape **and on every user-history segment**. It tops the canonical 100-user latest-1 slice, the 100-user multi-seed runs at holdout=1 (3 of 3 seeds), the 300-user single-seed run, the 300-user multi-seed runs at holdout=3 (3 of 3 seeds), and the per-segment partition of the 300u/h=3 runs (12 of 12 segment-seed cells). It is simultaneously the fastest model at ~7 ms mean latency.
+- `lightfm_warp` is the runner-up on every shape and every segment. The gap to ALS is wide (ALS NDCG@10 ~1.7-2.1x LightFM across slices and segments). Latency stays in the ~40 ms fast tier.
+- The third-rank position is **not stable** and depends on the segment: `popularity` is third in the cold and warm buckets; `tfidf_content` is third in regular; `sbert_faiss_content` is third in heavy. The single "third-best" label from the original canonical table is misleading -- the actual third-place model changes with user-history size.
 - Among classical CF: ALS > LightFM > SVD top-K on NDCG@10 and on mean latency, on every studied shape.
 - `svd_topk` produces zero hits at K=10 on the small canonical slice and a small non-zero band at K=20 and at 300 users; the "Why SVD top-K stays at zero hits" subsection above explains this as an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
 - SVD rating prediction works and has RMSE 0.7558 / MAE 0.5706 on the sampled holdout.
-- These remain local directional results. Even with the variance work, both ALS and LightFM artifacts were trained on the full rating matrix including the eval holdout interactions -- a tighter leave-one-out comparison is logged in the audit plan's Deferred section.
+- These remain local directional results. Both ALS and LightFM artifacts were trained on the full rating matrix including the eval holdout interactions; the cold-start segmentation makes this leakage visible (both classical CF models invert textbook cold-vs-heavy behavior). A tighter leave-one-out retraining is logged in the audit plans' Deferred sections and is the right next step before quoting any absolute cold-start number.
 
 ## Caveats
 
@@ -190,5 +242,6 @@ Evaluated user counts: 259, 245, 265. Recall denominators change at holdout=3 (e
 - The canonical K=10 / K=20 tables at the top of this report come from a single 100-user deterministic-first-N latest-1 slice (run id `2026-05-20T18-47-21Z`). The Variance Bounds subsection covers seven additional runs across two slice sizes, two holdout shapes, and three seeds.
 - 55 of the 100 selected users had positive holdout items in the canonical run; the multi-seed 100-user runs landed at 54 / 52 / 54.
 - The holdout=3 expansion changes recall semantics: each user has three positive items in the denominator, capped at 1.0. Recall values across `holdout=1` and `holdout=3` runs are not directly comparable; the variance subsection treats them as separate tables.
-- Both ALS and LightFM artifacts were trained on the full rating matrix including the holdout interactions; absolute NDCG numbers are inflated to the same degree for both models, which preserves the ALS > LightFM ordering but does not establish absolute quality. A leave-one-out retraining is logged in the audit plan's Deferred section.
+- Both ALS and LightFM artifacts were trained on the full rating matrix including the holdout interactions; absolute NDCG numbers are inflated to the same degree for both models, which preserves the ALS > LightFM ordering but does not establish absolute quality. The cold-start segmentation surfaces this directly: both classical CF models score highest on the bucket with the least training behavior and lowest on the bucket with the most, which is the inverse of textbook CF cold-start curves. A leave-one-out retraining is logged in the audit plans' Deferred sections.
+- The cold-start segmentation per-bucket sample sizes are small (cold ~44, warm ~111, regular ~69, heavy ~32 users per seed). Per-segment orderings are directionally informative across 3 seeds but should not be reported as definitive without a larger eval slice or a leave-one-out comparison.
 - Generated artifacts are intentionally local and should be regenerated when code or data changes.
