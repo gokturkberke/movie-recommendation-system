@@ -133,7 +133,19 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Conclusions ("`
   - The report no longer claims ALS "produces no relevance hits in this run".
   - `.venv/bin/python -m unittest discover -s tests` stays 56/56.
 - **Expected outcome:** A single canonical 100-user × 9-model table where ALS is no longer a silent zero. Decision criterion: report and CSV agree; new ALS row carries non-zero relevance; SVD top-K stays at zero (handled separately in item 4).
-- **DONE / DROPPED:**
+- **DONE (commit `cb5e4dc`):** Re-ran the canonical 9-model 100-user command, regenerated `artifacts/evaluation/metrics_summary.{csv,json}` and the timestamped copy, then refreshed `docs/08_evaluation_results_report.md` (K=10 table, K=20 table, post-table paragraphs, Latency Findings, Conclusions, audit-trail line). ALS landed on top across the board.
+  - Metric / result (K=10, sorted by NDCG):
+    | Model | Precision@10 | Recall@10 | NDCG@10 | Latency mean |
+    |---|---:|---:|---:|---:|
+    | als_implicit | 0.0309 | 0.3091 | 0.1765 | 7.1 ms |
+    | lightfm_warp | 0.0255 | 0.2545 | 0.1427 | 40.4 ms |
+    | hybrid_content | 0.0073 | 0.0727 | 0.0382 | 1,369.4 ms |
+    | popularity | 0.0091 | 0.0909 | 0.0322 | 83.5 ms |
+    | svd_topk | 0.0000 | 0.0000 | 0.0000 | 174.2 ms |
+  - K=20 retains the same ordering; SVD top-K recovers a small non-zero band (HitRate@20 0.0727, NDCG@20 0.0178) but stays far below the two CF leaders. SVD rating prediction unchanged at RMSE=0.7558, MAE=0.5706.
+  - Run id: `artifacts/evaluation/metrics_summary_2026-05-20T18-47-21Z.{csv,json}`; `run_config.json` confirms `include_als=true`, `include_lightfm=true`, `include_sbert_faiss=true`, `max_users=100`, `positive_threshold=4.0`.
+  - Verification: `metrics_summary.csv` is 29 lines (1 header + 9 models x 3 K + 1 SVD rating prediction row); `als_implicit` `evaluated_user_count` at K=10 is 55, matching `lightfm_warp`; the report's audit-trail line now points to both this plan and the 2026-05-20 classical-CF plan.
+  - Decision: proceed to Item 4 for the SVD top-K explanation subsection. ALS leadership is the new canonical result on this 100-user / latest-1 / positive-holdout slice.
 
 ## 4) Document the SVD top-K zero-hit finding (no code change)
 
