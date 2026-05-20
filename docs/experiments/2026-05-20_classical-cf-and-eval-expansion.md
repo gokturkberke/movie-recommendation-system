@@ -120,7 +120,13 @@
   - 5-user smoke produces a populated `lightfm_warp` block.
   - Streamlit unit tests (`.venv/bin/python -m unittest discover -s tests`) still pass 100%.
 - **Expected outcome:** LightFM joins the offline evaluation as a measurable, fast, implicit-feedback alternative to Surprise SVD. Decision criterion: a populated `lightfm_warp` row in the smoke output, with mean latency below 500 ms.
-- **DONE / DROPPED:** (filled in after commit; include train wall time, `metadata.json:row_count`, and the 5-user smoke's `lightfm_warp` `precision_at_5 / ndcg_at_5 / latency_mean_ms` triple)
+- **DONE (commit `65de01d`):** Added the LightFM WARP offline baseline with prebuilt artifact loading, `--include-lightfm` CLI wiring, config defaults, training script, README setup notes, and unit coverage. The runner now records `lightfm_warp` when artifacts load and returns `lightfm_error` instead of crashing when LightFM or artifact files are unavailable.
+  - Install note: direct `pip install lightfm` and `pip install lightfm --no-build-isolation` both failed on this Python 3.11/macOS arm64 host with `AttributeError: 'dict' object has no attribute '__LIGHTFM_SETUP__'`. The package was installed by downloading `lightfm-1.17.tar.gz` to `/private/tmp`, patching setup to use `import builtins; builtins.__LIGHTFM_SETUP__ = True`, installing `wheel`, then running local source install. The built extension warns that OpenMP is unavailable, so training used one thread.
+  - Train wall time: 499.20 seconds for the default artifact at `artifacts/models/lightfm/`.
+  - Metadata: `row_count = 16863053`, `user_count = 305098`, `item_count = 40441`, `no_components = 64`, `loss = warp`, `epochs = 20`.
+  - 5-user smoke (`--include-lightfm --lightfm-artifacts-dir artifacts/models/lightfm`): `precision_at_5 = 0.0800`, `ndcg_at_5 = 0.1635`, `latency_mean_ms = 43.7`; no `lightfm_error` field.
+  - Verification: `tests.test_lightfm_recommender` 3/3 OK, `.venv/bin/python -m unittest discover -s tests` 53/53 OK, missing-artifact smoke returns a `lightfm_error` with the missing file list.
+  - Decision: proceed to Item 3.
 
 ## 3) Add an Implicit ALS baseline
 
