@@ -119,6 +119,14 @@ Per-user latency from fastest to slowest:
 
 `als_implicit` is both the fastest model in this run and the leader on every relevance metric -- the only baseline that wins both axes simultaneously. `lightfm_warp` is the next-best on relevance at 40.4 ms mean. `hybrid_content` stays under the 2,000 ms mean-latency gate but remains the slowest baseline.
 
+## Why SVD top-K stays at zero hits
+
+The `svd_topk` baseline calls `raw_svd_predictions` in `src/recommenders/svd.py`, which scores every movie not in the user's train ratings using the Surprise SVD model's `predict(uid, iid)` method, then returns the top-K by predicted rating. The same Surprise model also produces the RMSE / MAE values in the "SVD Rating Prediction" section above (0.7558 / 0.5706), so the predictor itself is sound on its training objective.
+
+The item 1 diagnostic in `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` ranked each sampled user's positive holdout movieId in the SVD full-catalog predicted-score sort. The five sampled users' holdouts landed at ranks 94, 20, 392, 14171, and 10934 -- four of five fell outside the top 50, and four of five outside the top 100. The user whose holdout was at rank 20 is the only K=20 hit in the canonical table.
+
+This is the expected weakness of explicit-rating SVD for top-K ranking, not a wiring bug. Surprise SVD optimizes mean squared error on observed (user, item) ratings; its top-ranked candidates are therefore items whose mean predicted rating crowds the upper bound (4.7 - 5.0), a narrow popular-favorable set -- catalog coverage at K=10 is only 0.0029. Improving this would mean blending the predicted score with a ranking signal (popularity log, recency) or replacing the baseline with a ranker trained on a ranking objective (LightFM WARP is already in the same table). That work is deferred and logged at the bottom of the audit plan.
+
 ## Conclusions
 
 - The evaluation flow covers 9 top-N models on the same 100-user slice. The ALS exclusion-semantics fix from `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` item 2 is applied in this run.
@@ -127,7 +135,7 @@ Per-user latency from fastest to slowest:
 - `hybrid_content` is the third-best ranker by NDCG but remains the slowest baseline.
 - `popularity` is still a useful simple baseline at K=10 (Precision 0.0091, Recall 0.0909) but is below both classical CF leaders on every rank-sensitive metric.
 - Among classical CF: ALS > LightFM > SVD top-K on NDCG@10 and on mean latency.
-- `svd_topk` produces zero hits at K=10 and a small non-zero band at K=20; item 1 of the audit plan diagnosed this as an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
+- `svd_topk` produces zero hits at K=10 and a small non-zero band at K=20; the "Why SVD top-K stays at zero hits" subsection above explains why this is an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
 - SVD rating prediction works and has RMSE 0.7558 / MAE 0.5706 on the sampled holdout.
 - These are still local directional results from one 100-user latest-1 holdout run, not a final benchmark claim.
 
