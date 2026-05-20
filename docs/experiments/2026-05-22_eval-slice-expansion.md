@@ -74,7 +74,7 @@
   - For at least 2 of the 3 runs, `top_n.als_implicit.10.evaluated_user_count` differs from the canonical 55 -- proof the slice actually shifted.
   - The DONE marker captures, for each seed: `evaluated_user_count`, `als_implicit.10.{precision,recall,ndcg,hit_rate}`, `lightfm_warp.10.{ndcg,hit_rate}`, `hybrid_content.10.{ndcg,hit_rate}`.
 - **Expected outcome:** A 3-run dataset for hypothesis H1. Decision criterion: artifacts exist; the three seed-specific evaluated_user_counts are not all identical.
-- **DONE (run completed; commit hash filled below):** Ran the canonical 9-model evaluation three times with `--user-sample-seed` in `42, 7, 1337` at `--max-users 100 --holdout-count 1`. Each run took ~5 minutes wall time. The slice genuinely shifted across seeds: `evaluated_user_count` at K=10 landed at 54 / 52 / 54 versus the deterministic-first-N reference of 55.
+- **DONE (commit `a16d88a`):** Ran the canonical 9-model evaluation three times with `--user-sample-seed` in `42, 7, 1337` at `--max-users 100 --holdout-count 1`. Each run took ~5 minutes wall time. The slice genuinely shifted across seeds: `evaluated_user_count` at K=10 landed at 54 / 52 / 54 versus the deterministic-first-N reference of 55.
   - Per-seed K=10 NDCG triples for the top-5 ranking models:
 
     | seed | evaluated_user_count | als_implicit | lightfm_warp | hybrid_content | popularity | sbert_faiss |
