@@ -73,7 +73,32 @@
   - At least 3 of 4 buckets have `evaluated_user_count >= 5` at K=10 for ALS.
   - ALS aggregate NDCG@10 within 0.005 of the 2026-05-22 seed-42 reference (deterministic model, same artifact).
 - **Expected outcome:** A first segmented dataset that validates bucket sizes. Decision criterion: pass the bucket-size gate; aggregate match holds.
-- **DONE / DROPPED:**
+- **DONE (commit to be backfilled):** Ran `--max-users 300 --holdout-count 3 --user-sample-seed 42 --segment-by-history`. All 4 default buckets cleared the >= 5 user gate. Aggregate metrics matched the 2026-05-22 seed-42 reference to full precision (segmentation does not alter the aggregate path).
+  - Bucket sizes at K=10:
+
+    | Bucket | Evaluated users |
+    |---|---:|
+    | cold_0_10 | 41 |
+    | warm_10_50 | 117 |
+    | regular_50_200 | 70 |
+    | heavy_200_plus | 31 |
+    | **Total** | **259** (matches aggregate `evaluated_user_count`) |
+
+  - Per-segment NDCG@10 (most informative table of the run):
+
+    | Model | cold_0_10 (n=41) | warm_10_50 (n=117) | regular_50_200 (n=70) | heavy_200_plus (n=31) |
+    |---|---:|---:|---:|---:|
+    | als_implicit | **0.5149** | 0.3177 | 0.1600 | 0.0406 |
+    | lightfm_warp | 0.3071 | 0.1655 | 0.0667 | 0.0280 |
+    | hybrid_content | 0.0676 | 0.0412 | 0.0254 | 0.0099 |
+    | popularity | 0.1360 | 0.0364 | 0.0152 | 0.0177 |
+    | sbert_faiss_content | 0.0531 | 0.0287 | 0.0116 | 0.0380 |
+    | tfidf_content | 0.0848 | 0.0339 | 0.0484 | 0.0000 |
+
+  - **Both H1 and H2 are refuted (informatively).** H1 predicted ALS would drop by >= 50% in cold_0_10 relative to aggregate. Instead it rises ~90% (0.5149 vs 0.2731 aggregate). H2 predicted at least one content baseline would beat LightFM in cold_0_10. LightFM cold_0_10 (0.3071) beats every content baseline (best content is popularity at 0.1360). The most likely interpretation: the **training-set leakage** documented in the 2026-05-22 plan's Caveats amplifies in cold-start, because cold users' "true" signal is overwhelmingly in the holdout and both ALS and LightFM artifacts were trained on the full matrix including those holdouts. This finding strengthens the case for the deferred leave-one-out retraining experiment.
+  - Aggregate sanity: ALS K=10 NDCG = 0.2731336481, hit_rate = 0.5598, precision = 0.0776, recall = 0.3861, evaluated_user_count = 259 -- exact match (to 10 decimals) to `metrics_summary_2026-05-20T19-57-47Z.json`.
+  - Run id: `artifacts/evaluation/metrics_summary_2026-05-20T21-09-15Z.{csv,json}` (gitignored).
+  - Decision: proceed to Item 3 (multi-seed runs at the same shape).
 
 ## 3) Multi-seed segmented runs at 300 users / holdout=3
 
