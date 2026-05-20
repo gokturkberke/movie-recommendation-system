@@ -1,7 +1,14 @@
 import pandas as pd
 import streamlit as st
 
-from config import DEMO_PROFILES_WITH_GENRES, MENU_ITEMS, MOOD_GENRE_MAP, get_tmdb_api_key
+from config import (
+    DEMO_PROFILES_WITH_GENRES,
+    EVALUATION_DEFAULTS,
+    MENU_ITEMS,
+    MOOD_GENRE_MAP,
+    get_tmdb_api_key,
+    project_path,
+)
 from data_access import (
     latest_release_info,
     load_links,
@@ -64,6 +71,13 @@ def cached_movie_stats():
 @st.cache_resource(show_spinner=False)
 def cached_svd_model():
     return load_surprise_model()
+
+
+@st.cache_resource(show_spinner="Loading SBERT semantic index...")
+def cached_sbert_index(index_dir):
+    from experimental.sbert_faiss import load_sbert_faiss_index
+
+    return load_sbert_faiss_index(index_dir)
 
 
 @st.cache_data(show_spinner=False)
@@ -140,6 +154,30 @@ def render_content_based_page(context):
         st.error("Content-based recommendations are unavailable because the TF-IDF matrix could not be built.")
         return
 
+    sbert_available = context["sbert_index"] is not None
+    mode_options = ["TF-IDF (hybrid)", "SBERT semantic"]
+    mode = st.radio(
+        "Recommender:",
+        options=mode_options,
+        index=0,
+        key="content_recommender_mode",
+        horizontal=True,
+    )
+    if mode == "SBERT semantic":
+        if sbert_available:
+            sbert_metadata = context["sbert_index"].metadata or {}
+            sbert_model_name = sbert_metadata.get("model_name", "SBERT model")
+            st.caption(f"Using semantic embeddings from {sbert_model_name} via FAISS inner-product search.")
+        else:
+            st.warning(
+                "SBERT artifacts were not found at `"
+                + str(context["sbert_index_dir"])
+                + "`. Run `scripts/build_sbert_faiss_index.py` to enable this mode."
+            )
+            if context["sbert_load_error"]:
+                st.caption(f"Loader error: {context['sbert_load_error']}")
+            return
+
     movie_title = st.text_input("Enter a movie title you like:", key="content_movie_title")
     selected_movie_id = None
     selected_title = None
@@ -176,6 +214,25 @@ def render_content_based_page(context):
         return
     if needs_disambiguation and selected_movie_id is None:
         st.warning("Multiple movies match this title. Please select one from the list.")
+        return
+
+    if mode == "SBERT semantic":
+        if selected_movie_id is None:
+            st.warning("SBERT mode requires an exact title match. Please pick a movie from the suggestions.")
+            return
+        from experimental.sbert_faiss import sbert_faiss_recommendations_for_seed_ids
+
+        recommendations = sbert_faiss_recommendations_for_seed_ids(
+            [selected_movie_id],
+            context["sbert_index"],
+            context["movies"],
+            watched_movie_ids=st.session_state.watched_movie_ids,
+            top_n=10,
+        )
+        matched_title = selected_title
+        if matched_title:
+            st.info(f"Semantic recommendations are based on: **{matched_title}**")
+        render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
         return
 
     movie_stats = cached_movie_stats()
@@ -436,6 +493,15 @@ def load_context():
     movies_with_content = merge_tmdb_ids(movies_with_content, links)
     tmdb_api_key = get_tmdb_api_key()
 
+    sbert_defaults = EVALUATION_DEFAULTS.get("sbert_faiss") or {}
+    sbert_index_dir = project_path(sbert_defaults.get("index_dir", "artifacts/indexes/sbert_faiss"))
+    sbert_index = None
+    sbert_load_error = None
+    try:
+        sbert_index = cached_sbert_index(str(sbert_index_dir))
+    except (FileNotFoundError, ImportError, ValueError) as exc:
+        sbert_load_error = str(exc)
+
     return {
         "movies": movies,
         "tags": tags,
@@ -445,6 +511,9 @@ def load_context():
         "movies_with_content": movies_with_content,
         "content_enabled": tfidf_matrix is not None and tfidf_vectorizer is not None and not movies_with_content.empty,
         "tmdb_api_key": tmdb_api_key,
+        "sbert_index": sbert_index,
+        "sbert_index_dir": sbert_index_dir,
+        "sbert_load_error": sbert_load_error,
     }
 
 

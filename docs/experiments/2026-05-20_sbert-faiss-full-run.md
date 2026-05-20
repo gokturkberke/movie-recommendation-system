@@ -69,7 +69,7 @@
   - In the new CSV, `sbert_faiss_content` exists at K=5, 10, 20 with `evaluated_user_count >= 1`.
   - `docs/08_evaluation_results_report.md` no longer contains the literal `13,491.9 ms`.
 - **Expected outcome:** A faithful, repeatable report that future agents can quote without needing the "actually that's stale" footnote. Decision criterion: every table reflects the new run; no number in the report contradicts `metrics_summary.csv`.
-- **DONE (commit `<pending>`):** Re-ran the 25-user evaluation with all baselines plus `--include-sbert-faiss`. `docs/08_evaluation_results_report.md` rewritten to use post-optimization latencies and to include `sbert_faiss_content` in both K tables and the latency table.
+- **DONE (commit `5612ff0`):** Re-ran the 25-user evaluation with all baselines plus `--include-sbert-faiss`. `docs/08_evaluation_results_report.md` rewritten to use post-optimization latencies and to include `sbert_faiss_content` in both K tables and the latency table.
   - Metric / result (K=10):
     | Model | Precision@10 | Recall@10 | NDCG@10 | Latency mean |
     |---|---:|---:|---:|---:|
@@ -100,4 +100,8 @@
   - Manual: `.venv/bin/streamlit run src/app.py`. On the Content-Based page, the new radio appears, selecting "SBERT semantic" returns a list of 10 movies for a seed like "The Matrix", and TF-IDF mode still returns the existing hybrid output.
   - With `artifacts/indexes/sbert_faiss/` temporarily renamed to `_sbert_faiss_disabled`, restarting the app shows the SBERT option as disabled and a caption telling the user to run the build script. Restore the directory after the check.
 - **Expected outcome:** Streamlit users can compare the two recommenders directly on the same seed without leaving the page. Decision criterion: manual smoke shows both branches return 10 rows on a real seed; missing-artifact branch shows the disabled state without crashing.
-- **DONE / DROPPED:** (filled in after commit; record the seed movie used in the smoke and the elapsed wall time for the SBERT search)
+- **DONE (commit `<pending>`):** Added a TF-IDF / SBERT radio at the top of the Content-Based page, with a cached `cached_sbert_index()` resource that lazily imports `experimental.sbert_faiss`. Missing-artifact branch shows a graceful warning and short-circuits the page. README "Future work" no longer lists Streamlit SBERT integration.
+  - Smoke: `.venv/bin/python -m unittest discover -s tests` → 50/50 OK; `.venv/bin/python -m streamlit run src/app.py` reached `/_stcore/health = ok` and served `/` with HTTP 200.
+  - End-to-end SBERT path verified against the real index with seed `Matrix, The (1999)` (movieId 2571): index load 2983.7 ms (one-shot, cached afterward), recommendation 18.4 ms, top 3 results `Matrix Revolutions (2003) / Matrix Reloaded (2003) / Animatrix (2003)` — clean semantic neighbors with similarity scores 0.88 / 0.87 / 0.76.
+  - Index dir: `artifacts/indexes/sbert_faiss/` (from `EVALUATION_DEFAULTS["sbert_faiss"]["index_dir"]`).
+  - Decision: shipped. Future work narrows to LightFM / ALS / graph / sequence models and larger repeated evaluation runs.

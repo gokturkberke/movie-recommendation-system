@@ -28,6 +28,7 @@ This project is a comprehensive movie recommendation system that suggests person
 Implemented in the Streamlit app:
 
 * TF-IDF content-based recommendations with hybrid reranking.
+* SBERT + FAISS semantic mode on the Content-Based page (requires prebuilt local index artifacts; see SBERT setup below).
 * Surprise SVD collaborative filtering.
 * Mood-based recommendations.
 * Random movie picker.
@@ -45,7 +46,6 @@ Implemented for offline evaluation only:
 
 Future work:
 
-* Streamlit UI integration for SBERT + FAISS.
 * LightFM / Implicit ALS / graph / sequence models.
 * Larger, repeated evaluation runs before claiming model quality improvements.
 
