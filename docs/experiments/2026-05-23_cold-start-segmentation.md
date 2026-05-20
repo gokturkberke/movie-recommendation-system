@@ -73,7 +73,7 @@
   - At least 3 of 4 buckets have `evaluated_user_count >= 5` at K=10 for ALS.
   - ALS aggregate NDCG@10 within 0.005 of the 2026-05-22 seed-42 reference (deterministic model, same artifact).
 - **Expected outcome:** A first segmented dataset that validates bucket sizes. Decision criterion: pass the bucket-size gate; aggregate match holds.
-- **DONE (commit to be backfilled):** Ran `--max-users 300 --holdout-count 3 --user-sample-seed 42 --segment-by-history`. All 4 default buckets cleared the >= 5 user gate. Aggregate metrics matched the 2026-05-22 seed-42 reference to full precision (segmentation does not alter the aggregate path).
+- **DONE (commit `d066101`):** Ran `--max-users 300 --holdout-count 3 --user-sample-seed 42 --segment-by-history`. All 4 default buckets cleared the >= 5 user gate. Aggregate metrics matched the 2026-05-22 seed-42 reference to full precision (segmentation does not alter the aggregate path).
   - Bucket sizes at K=10:
 
     | Bucket | Evaluated users |
