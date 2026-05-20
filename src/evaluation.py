@@ -19,6 +19,39 @@ def require_columns(df, columns, frame_name="DataFrame"):
         raise ValueError(f"{frame_name} is missing required columns: {missing}")
 
 
+DEFAULT_HISTORY_SEGMENTS = (
+    ("cold_0_10", 0, 10),
+    ("warm_10_50", 10, 50),
+    ("regular_50_200", 50, 200),
+    ("heavy_200_plus", 200, None),
+)
+
+
+def segment_users_by_history(train, segments=None, user_col=DEFAULT_USER_COL):
+    """Bucket users by train-interaction count using `lower <= n < upper`.
+
+    `lower=None` treats the lower bound as open below; `upper=None` treats the
+    upper bound as open above. Returns dict[segment_name -> set[user_id]]. A
+    user lands in at most one segment when the segments are non-overlapping.
+    """
+    seg_specs = tuple(segments) if segments else DEFAULT_HISTORY_SEGMENTS
+    if train is None or train.empty or user_col not in train.columns:
+        return {name: set() for name, _, _ in seg_specs}
+    counts = train.groupby(user_col).size()
+    result = {}
+    for name, lower, upper in seg_specs:
+        if lower is None and upper is None:
+            mask = pd.Series(True, index=counts.index)
+        elif lower is None:
+            mask = counts < int(upper)
+        elif upper is None:
+            mask = counts >= int(lower)
+        else:
+            mask = (counts >= int(lower)) & (counts < int(upper))
+        result[name] = set(int(value) for value in counts.index[mask].tolist())
+    return result
+
+
 def temporal_train_test_split(
     ratings,
     holdout_count=1,

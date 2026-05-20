@@ -12,10 +12,12 @@ import pandas as pd
 from config import EVALUATION_DEFAULTS, project_path
 from data_access import load_movies, load_ratings, load_surprise_model, load_tags
 from evaluation import (
+    DEFAULT_HISTORY_SEGMENTS,
     measure_per_user_latency,
     popularity_recommendations,
     random_recommendations,
     rating_prediction_metrics,
+    segment_users_by_history,
     svd_topk_recommendations,
     temporal_train_test_split,
     tfidf_content_recommendations,
@@ -137,8 +139,9 @@ def build_metric_report(
     baseline_recommendations=None,
     score_col=None,
     positive_threshold=4.0,
+    segment_user_ids=None,
 ):
-    return {
+    report = {
         str(k): top_n_metrics(
             recommendations,
             holdout,
@@ -151,6 +154,41 @@ def build_metric_report(
         )
         for k in k_values
     }
+    if not segment_user_ids:
+        return report
+
+    has_rating = "rating" in holdout.columns
+    has_user_col = "userId" in holdout.columns
+    rec_has_user = "userId" in recommendations.columns
+    for k in k_values:
+        seg_block = {}
+        for seg_name, seg_ids in segment_user_ids.items():
+            if not seg_ids or not has_user_col:
+                continue
+            seg_holdout = holdout[holdout["userId"].isin(seg_ids)]
+            if seg_holdout.empty:
+                continue
+            if has_rating:
+                positive = seg_holdout[pd.to_numeric(seg_holdout["rating"], errors="coerce") >= positive_threshold]
+                if positive.empty:
+                    continue
+            seg_rec = recommendations[recommendations["userId"].isin(seg_ids)] if rec_has_user else recommendations.iloc[0:0]
+            seg_baseline = None
+            if baseline_recommendations is not None and "userId" in baseline_recommendations.columns:
+                seg_baseline = baseline_recommendations[baseline_recommendations["userId"].isin(seg_ids)]
+            seg_block[seg_name] = top_n_metrics(
+                seg_rec,
+                seg_holdout,
+                train=train,
+                movies=movies,
+                baseline_recommendations=seg_baseline,
+                k=k,
+                score_col=score_col,
+                positive_threshold=positive_threshold,
+            )
+        if seg_block:
+            report[str(k)]["segments"] = seg_block
+    return report
 
 
 def recommendation_examples(
@@ -458,6 +496,7 @@ def evaluate_baseline(
     score_col,
     baseline_recommendations=None,
     positive_threshold=4.0,
+    segment_user_ids=None,
 ):
     recommendations, latency = run_per_user(recommend_for_user, eval_user_ids, measure_latency)
     metrics = build_metric_report(
@@ -469,6 +508,7 @@ def evaluate_baseline(
         baseline_recommendations=baseline_recommendations,
         score_col=score_col,
         positive_threshold=positive_threshold,
+        segment_user_ids=segment_user_ids,
     )
     return {
         "name": name,
@@ -582,6 +622,8 @@ def run_evaluation(
     output_dir=None,
     random_seed=42,
     user_sample_seed=None,
+    segment_by_history=False,
+    segment_bounds=None,
     semantic_components=64,
     semantic_random_state=42,
     sbert_faiss_index_dir=None,
@@ -611,6 +653,23 @@ def run_evaluation(
         holdout_count=holdout_count,
         min_interactions=min_interactions,
     )
+
+    resolved_segments = None
+    segment_user_ids = None
+    if segment_by_history:
+        if segment_bounds:
+            bounds = [int(value) for value in segment_bounds]
+            specs = []
+            for index in range(len(bounds) + 1):
+                lower = bounds[index - 1] if index > 0 else None
+                upper = bounds[index] if index < len(bounds) else None
+                lower_label = "neg" if lower is None else str(lower)
+                upper_label = "plus" if upper is None else str(upper)
+                specs.append((f"hist_{lower_label}_{upper_label}", lower, upper))
+            resolved_segments = tuple(specs)
+        else:
+            resolved_segments = DEFAULT_HISTORY_SEGMENTS
+        segment_user_ids = segment_users_by_history(train, segments=resolved_segments)
 
     eval_user_ids = (
         holdout["userId"].dropna().drop_duplicates().tolist()
@@ -692,6 +751,16 @@ def run_evaluation(
             "measure_latency": bool(measure_latency),
             "random_seed": int(random_seed),
             "user_sample_seed": None if user_sample_seed is None else int(user_sample_seed),
+            "segment_by_history": bool(segment_by_history),
+            "segment_bounds": list(segment_bounds) if segment_bounds else None,
+            "segment_definitions": (
+                [
+                    {"name": name, "lower": lower, "upper": upper}
+                    for name, lower, upper in resolved_segments
+                ]
+                if resolved_segments
+                else None
+            ),
             "semantic_components": int(semantic_components),
             "semantic_random_state": int(semantic_random_state),
             "semantic_method": "tfidf+truncated_svd" if include_semantic else None,
@@ -751,6 +820,7 @@ def run_evaluation(
         measure_latency,
         score_col="score",
         positive_threshold=positive_threshold,
+        segment_user_ids=segment_user_ids,
     )
     record(popularity_result)
     popularity_recommendations_df = popularity_result["recommendations"]
@@ -777,6 +847,7 @@ def run_evaluation(
             score_col="score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_tfidf and tfidf_matrix is not None and not movies_with_content.empty:
@@ -801,6 +872,7 @@ def run_evaluation(
             score_col="score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_content and tfidf_matrix is not None and not movies_with_content.empty:
@@ -825,6 +897,7 @@ def run_evaluation(
             score_col=None,
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_semantic and embedding_index is not None and embedding_index.embeddings.size:
@@ -847,6 +920,7 @@ def run_evaluation(
             score_col="similarity_score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_sbert_faiss and sbert_index is not None and sbert_index.embeddings.size:
@@ -869,6 +943,7 @@ def run_evaluation(
             score_col="similarity_score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_lightfm and lightfm_artifacts is not None:
@@ -890,6 +965,7 @@ def run_evaluation(
             score_col="similarity_score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_als and als_artifacts is not None:
@@ -911,6 +987,7 @@ def run_evaluation(
             score_col="similarity_score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_svd_topk and svd_model is not None:
@@ -934,6 +1011,7 @@ def run_evaluation(
             score_col="score",
             baseline_recommendations=popularity_recommendations_df,
             positive_threshold=positive_threshold,
+            segment_user_ids=segment_user_ids,
         ))
 
     if include_svd:

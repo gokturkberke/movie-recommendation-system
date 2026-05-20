@@ -40,6 +40,8 @@ def build_arg_parser():
     parser.add_argument("--no-measure-latency", action="store_true", help="Disable per-user latency measurement.")
     parser.add_argument("--random-seed", type=int, default=int(EVALUATION_DEFAULTS.get("random_seed", 42)), help="Seed used by the random baseline.")
     parser.add_argument("--user-sample-seed", type=int, default=None, help="Optional seed for random user-pool sampling. When unset, the eligible-user list is taken first-N (deterministic, backward compatible).")
+    parser.add_argument("--segment-by-history", action="store_true", help="Attach per-segment metrics (by user train-interaction count) to each model's K block. Default segments: cold_0_10 / warm_10_50 / regular_50_200 / heavy_200_plus.")
+    parser.add_argument("--segment-bounds", default=None, help="Optional comma-separated boundaries for custom segments, e.g. '5,20,100'. Builds open-ended buckets [neg..5), [5..20), [20..100), [100..plus). Implies --segment-by-history.")
     parser.add_argument("--output-dir", default=str(EVALUATION_OUTPUT_DIR), help="Directory for metrics_summary.json/csv. Use empty string to disable saving.")
     parser.add_argument("--example-count", type=int, default=0, help="Include this many recommendation examples.")
     parser.add_argument("--include-reasons", action="store_true", help="Include hybrid explanation text in examples.")
@@ -50,6 +52,10 @@ def main():
     parser = build_arg_parser()
     args = parser.parse_args()
     output_dir = args.output_dir if args.output_dir else None
+    segment_bounds = None
+    if args.segment_bounds:
+        segment_bounds = [int(value.strip()) for value in args.segment_bounds.split(",") if value.strip()]
+    segment_by_history = args.segment_by_history or bool(segment_bounds)
     report = run_evaluation(
         max_users=args.max_users,
         k_values=parse_k_values(args.k),
@@ -69,6 +75,8 @@ def main():
         output_dir=output_dir,
         random_seed=args.random_seed,
         user_sample_seed=args.user_sample_seed,
+        segment_by_history=segment_by_history,
+        segment_bounds=segment_bounds,
         semantic_components=args.semantic_components,
         semantic_random_state=args.semantic_random_state,
         sbert_faiss_index_dir=args.sbert_faiss_index_dir,
