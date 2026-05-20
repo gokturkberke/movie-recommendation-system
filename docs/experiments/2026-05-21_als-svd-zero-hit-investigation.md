@@ -83,7 +83,19 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Conclusions ("`
   - 5-user smoke produces a populated `als_implicit` block with `hit_rate_at_k > 0` at K=5 -- the first non-zero ALS row in this project's history.
   - The smoke run's `recommended_item_count` for `als_implicit.5` is exactly `5 * evaluated_user_count` (no silent drops; LightFM passes this same check today).
 - **Expected outcome:** The wiring bug is closed; ALS rejoins the relevance comparison. Decision criterion: 5-user smoke `hit_rate_at_k > 0` and the full test suite stays green.
-- **DONE / DROPPED:**
+- **DONE (commit `9ee777c`):** Flipped `filter_already_liked_items` to `False` in `src/experimental/als_recommender.py` (with a three-line comment naming the invariant) and updated `tests/test_als_recommender.py` to expect the new flag value plus a second exclusion test on a different watched movieId. The post-hoc `filter_watched_movies` call now does all train-history exclusion; the holdout movieIds, which previously sat in the pre-split `user_items` row, are no longer filtered out of ALS candidates.
+  - 5-user smoke (`--max-users 5 --k 5 --include-als --als-artifacts-dir artifacts/models/als`):
+    | Metric | Before fix | After fix |
+    |---|---:|---:|
+    | hit_rate@5 | 0.0000 | 0.4000 |
+    | precision@5 | 0.0000 | 0.0800 |
+    | recall@5 | 0.0000 | 0.4000 |
+    | NDCG@5 | 0.0000 | 0.1723 |
+    | evaluated_user_count | 5 | 5 |
+    | recommended_item_count | 13 | 22 |
+  - Unit tests: `.venv/bin/python -m unittest tests.test_als_recommender` 4/4 OK (was 3/3 before the added test); full suite `.venv/bin/python -m unittest discover -s tests` 57/57 OK (was 56/56).
+  - The artifact directory `artifacts/models/als/` was not modified -- the change is purely in how the runtime consumes the artifact.
+  - Decision: proceed to Item 3. The 5-user smoke validates the code path; the 100-user re-run in Item 3 will produce the canonical comparison row.
 
 ## 3) 100-user re-evaluation and report refresh
 
