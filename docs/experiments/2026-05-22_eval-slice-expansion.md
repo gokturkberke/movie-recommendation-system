@@ -156,7 +156,27 @@
   - `recall_at_10` numbers are mechanically smaller than items 2 and 3 (denominator is 3 instead of 1); the plan acknowledges this in item 5's paragraph.
   - DONE marker captures per-seed evaluated_user_count and the same per-model K=10 metrics for the three runs.
 - **Expected outcome:** A 3-run dataset for hypothesis H3. Decision criterion: artifacts exist; the holdout=3 semantics is correctly noted in the synthesis.
-- **DONE / DROPPED:**
+- **DONE (commit to be backfilled):** Ran the 9-model evaluation three times at `--max-users 300 --holdout-count 3 --user-sample-seed` in `42, 7, 1337`. Each run took ~10 minutes wall time; chained as a single background bash for ~30 minutes total. H3 confirmed: ALS > LightFM > everything else holds in 3 of 3 seeds.
+  - Per-seed K=10 NDCG:
+
+    | seed | evaluated_user_count | als_implicit | lightfm_warp | hybrid_content | popularity | sbert_faiss | tfidf_content | svd_topk |
+    |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+    | 42 | 259 | 0.2731 | 0.1447 | 0.0373 | 0.0442 | 0.0290 | 0.0418 | 0.0160 |
+    | 7 | 245 | 0.2354 | 0.1087 | 0.0372 | 0.0464 | 0.0176 | 0.0371 | 0.0120 |
+    | 1337 | 265 | 0.2142 | 0.1176 | 0.0231 | 0.0341 | 0.0180 | 0.0262 | 0.0213 |
+
+  - Per-seed K=10 Recall (denominator is 3 holdout items per user, capped at 1.0):
+
+    | seed | als_implicit | lightfm_warp | hybrid_content |
+    |---:|---:|---:|---:|
+    | 42 | 0.3861 | 0.2368 | 0.0611 |
+    | 7 | 0.3156 | 0.1884 | 0.0565 |
+    | 1337 | 0.2956 | 0.1899 | 0.0346 |
+
+  - **Knife-edge finding:** `popularity` (NDCG 0.0341-0.0464) and `tfidf_content` (0.0262-0.0418) both beat `hybrid_content` (0.0231-0.0373) on NDCG@10 in 3 of 3 holdout=3 seeds. This contradicts the impression from the 2026-05-21 single-run report where hybrid was the third-best ranker. The hybrid recommender's third-place ranking is therefore **not robust** at the holdout=3 shape -- flag this in item 5.
+  - **Recall semantics correction:** The plan's hypothesis text predicted recall numbers would be "mechanically smaller" at holdout=3. The opposite happened -- with 3 chances per user to land a hit in top-10 (vs 1), recall went up (ALS 0.36 -> 0.39 at seed 42). The recall metric is still in [0, 1] but the user-level distribution shifts upward. Item 5 will state this correctly.
+  - Run ids: `artifacts/evaluation/metrics_summary_2026-05-20T19-57-47Z.{csv,json}` (seed 42), `metrics_summary_2026-05-20T20-07-31Z.{csv,json}` (seed 7), `metrics_summary_2026-05-20T20-26-25Z.{csv,json}` (seed 1337). All gitignored.
+  - Decision: proceed to Item 5 (synthesis). All three hypotheses (H1, H2, H3) confirmed for ALS leadership; one new finding -- hybrid's #3 spot is unstable -- to surface in the report.
 
 ## 5) Synthesis -- "Variance Bounds" subsection in the evaluation report
 
