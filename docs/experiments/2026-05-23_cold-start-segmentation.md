@@ -160,7 +160,20 @@
   - No code is touched in this item.
   - `.venv/bin/python -m unittest discover -s tests` stays at 63 (doc-only).
 - **Expected outcome:** A readable cold-start picture. Decision criterion: the four tables agree with the three run JSONs row-by-row; Conclusions reflects the segmented reality.
-- **DONE / DROPPED:**
+- **DONE (commit `f1142b3`):** Added the "Cold-start segmentation (user-history buckets)" subsection to `docs/08_evaluation_results_report.md` with four per-bucket tables (mean +/- std across seeds 42, 7, 1337). Conclusions reworded: ALS leadership tightened from "every shape" to "every shape and every segment" (12 of 12 segment-seed cells); third-rank framing replaced with the segment-dependent ordering (popularity / popularity / tfidf / sbert across cold / warm / regular / heavy). Caveats gained per-bucket sample-size note (44/111/69/32 per seed) and a stronger leakage framing pointing to the cold-vs-heavy inversion as visible evidence.
+  - Cross-table NDCG@10 summary (mean +/- std):
+
+    | Model | cold | warm | regular | heavy |
+    |---|---:|---:|---:|---:|
+    | als_implicit | 0.4610 +/- 0.0743 | 0.2820 +/- 0.0618 | 0.1174 +/- 0.0442 | 0.0663 +/- 0.0364 |
+    | lightfm_warp | 0.2701 +/- 0.0378 | 0.1328 +/- 0.0308 | 0.0562 +/- 0.0154 | 0.0362 +/- 0.0072 |
+    | popularity | 0.0876 +/- 0.0423 | 0.0415 +/- 0.0096 | 0.0247 +/- 0.0104 | 0.0184 +/- 0.0132 |
+    | hybrid_content | 0.0585 +/- 0.0079 | 0.0365 +/- 0.0102 | 0.0201 +/- 0.0094 | 0.0103 +/- 0.0065 |
+    | tfidf_content | 0.0562 +/- 0.0266 | 0.0318 +/- 0.0055 | 0.0370 +/- 0.0179 | 0.0140 +/- 0.0136 |
+    | sbert_faiss_content | 0.0394 +/- 0.0148 | 0.0184 +/- 0.0095 | 0.0140 +/- 0.0057 | 0.0244 +/- 0.0143 |
+
+  - Tests stay 64/64 (doc-only change).
+  - Decision: shipped. All four items of this plan are now DONE. The leave-one-out retraining experiment is now the most natural follow-on -- the cold-start inversion makes it concretely worth doing rather than a hypothetical "would be more rigorous" exercise.
 
 ## Deferred / Future (out of this plan)
 
