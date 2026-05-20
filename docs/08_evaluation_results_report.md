@@ -8,7 +8,9 @@ This report summarizes the latest local offline evaluation run:
 .venv/bin/python scripts/evaluate_baselines.py \
   --max-users 25 --k 5,10,20 \
   --include-random --include-tfidf --include-content --include-semantic \
-  --include-svd-topk --include-svd \
+  --include-svd --include-svd-topk \
+  --include-sbert-faiss \
+  --sbert-faiss-index-dir artifacts/indexes/sbert_faiss \
   --output-dir artifacts/evaluation
 ```
 
@@ -20,7 +22,8 @@ Run configuration:
 - Positive threshold: rating >= 4.0
 - Movie catalog rows: 79,477
 - Ratings rows: 33,703,215
-- Semantic baseline: TF-IDF + TruncatedSVD LSA, not SBERT/FAISS
+- Semantic baseline: TF-IDF + TruncatedSVD LSA (`--include-semantic`)
+- SBERT+FAISS baseline: `sentence-transformers/all-MiniLM-L6-v2`, 384-dim, full-catalog index under `artifacts/indexes/sbert_faiss/` (`row_count = 79,477`)
 
 Generated local artifacts:
 
@@ -30,6 +33,8 @@ Generated local artifacts:
 - `artifacts/evaluation/run_config.json`
 
 These artifacts are local/generated and are not tracked by git.
+
+The audit trail for this run lives in `docs/experiments/2026-05-20_sbert-faiss-full-run.md`.
 
 ## Metric Meanings
 
@@ -51,29 +56,31 @@ These artifacts are local/generated and are not tracked by git.
 
 ### Top-N at K=10
 
-| Model | Precision@10 | Recall@10 | HitRate@10 | NDCG@10 | Coverage | Diversity | Novelty | Mean latency |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| popularity | 0.0133 | 0.1333 | 0.1333 | 0.0430 | 0.00036 | 0.7952 | 8.5845 | 39.9 ms |
-| hybrid_content | 0.0133 | 0.1333 | 0.1333 | 0.0401 | 0.00094 | 0.6897 | 9.7544 | 13,491.9 ms |
-| random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00189 | 0.8774 | 11.9178 | 11.7 ms |
-| semantic_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00135 | 0.5642 | 11.2597 | 110.5 ms |
-| svd_topk | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00122 | 0.7800 | 11.0585 | 186.3 ms |
-| tfidf_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00096 | 0.6380 | 10.0830 | 51.0 ms |
+| Model | Precision@10 | Recall@10 | HitRate@10 | NDCG@10 | MAP@10 | MRR@10 | Coverage | Diversity | Novelty | Mean latency |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| popularity | 0.0133 | 0.1333 | 0.1333 | 0.0430 | 0.0178 | 0.0178 | 0.00036 | 0.7952 | 8.5845 | 38.9 ms |
+| hybrid_content | 0.0133 | 0.1333 | 0.1333 | 0.0401 | 0.0148 | 0.0148 | 0.00094 | 0.6897 | 9.7544 | 1,320.7 ms |
+| random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00189 | 0.8774 | 11.9178 | 10.8 ms |
+| sbert_faiss_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00126 | 0.7297 | 10.9657 | 36.1 ms |
+| semantic_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00135 | 0.5642 | 11.2597 | 117.8 ms |
+| svd_topk | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00122 | 0.7800 | 11.0585 | 194.2 ms |
+| tfidf_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00096 | 0.6380 | 10.0830 | 43.4 ms |
 
-At K=10, `hybrid_content` ties `popularity` on precision, recall, and hit rate, but has slightly lower NDCG. Hybrid recommends a broader and more novel set than popularity, but it does not currently show a clear relevance win in this run.
+At K=10, `popularity` and `hybrid_content` tie on precision, recall, and hit rate. Popularity has a slight NDCG edge because its single hit lands at a higher rank. The other five models produce no hits at K=10 in this 15-user slice.
 
 ### Top-N at K=20
 
-| Model | Precision@20 | Recall@20 | HitRate@20 | NDCG@20 | Coverage | Diversity | Novelty |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| hybrid_content | 0.0133 | 0.2667 | 0.2667 | 0.0744 | 0.00157 | 0.6721 | 10.0125 |
-| popularity | 0.0100 | 0.2000 | 0.2000 | 0.0582 | 0.00062 | 0.8055 | 8.8027 |
-| svd_topk | 0.0067 | 0.1333 | 0.1333 | 0.0331 | 0.00243 | 0.7865 | 11.1930 |
-| tfidf_content | 0.0033 | 0.0667 | 0.0667 | 0.0167 | 0.00170 | 0.6598 | 10.2603 |
-| random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00377 | 0.8581 | 11.8972 |
-| semantic_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00244 | 0.5672 | 11.3028 |
+| Model | Precision@20 | Recall@20 | HitRate@20 | NDCG@20 | MAP@20 | MRR@20 | Coverage | Diversity | Novelty |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| hybrid_content | 0.0133 | 0.2667 | 0.2667 | 0.0744 | 0.0246 | 0.0246 | 0.00157 | 0.6721 | 10.0125 |
+| popularity | 0.0100 | 0.2000 | 0.2000 | 0.0582 | 0.0211 | 0.0211 | 0.00062 | 0.8055 | 8.8027 |
+| svd_topk | 0.0067 | 0.1333 | 0.1333 | 0.0331 | 0.0087 | 0.0087 | 0.00243 | 0.7865 | 11.1930 |
+| tfidf_content | 0.0033 | 0.0667 | 0.0667 | 0.0167 | 0.0044 | 0.0044 | 0.00170 | 0.6598 | 10.2603 |
+| random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00377 | 0.8581 | 11.8972 |
+| sbert_faiss_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00247 | 0.7355 | 11.0031 |
+| semantic_content | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.00244 | 0.5672 | 11.3028 |
 
-At K=20, `hybrid_content` is the strongest top-N model in this run by recall, hit rate, and NDCG. The gain is small and based on only 15 users with positive holdout items, so this should be treated as directional rather than conclusive.
+At K=20, `hybrid_content` is the strongest top-N model in this run by recall, hit rate, NDCG, MAP, and MRR. The margin over popularity is small and based on only 15 users with positive holdout items, so this should be treated as directional rather than conclusive.
 
 ### SVD Rating Prediction
 
@@ -89,36 +96,29 @@ These values measure rating prediction error, not recommendation list quality.
 
 ## Latency Findings
 
-`hybrid_content` is the clear latency problem:
+Watch-history hybrid is no longer the latency outlier:
 
 | Model | Mean latency | p95 latency |
 |---|---:|---:|
-| random | 11.7 ms | 12.8 ms |
-| popularity | 39.9 ms | 51.8 ms |
-| tfidf_content | 51.0 ms | 104.9 ms |
-| semantic_content | 110.5 ms | 155.0 ms |
-| svd_topk | 186.3 ms | 190.7 ms |
-| hybrid_content | 13,491.9 ms | 43,753.9 ms |
+| random | 10.8 ms | 12.0 ms |
+| sbert_faiss_content | 36.1 ms | 74.5 ms |
+| popularity | 38.9 ms | 44.9 ms |
+| tfidf_content | 43.4 ms | 83.2 ms |
+| semantic_content | 117.8 ms | 160.3 ms |
+| svd_topk | 194.2 ms | 214.6 ms |
+| hybrid_content | 1,320.7 ms | 4,007.3 ms |
 
-The hybrid path is orders of magnitude slower than the other baselines. This should be profiled before optimization. The likely cause is repeated per-seed content recommendation work in the watch-history hybrid flow.
-
-## Follow-Up Checkpoints
-
-After this report was first generated, the evaluation CSV/JSON schema was extended with `map_at_k` and `mrr_at_k`. The watch-history hybrid path was also optimized by batching seed similarity computation and deferring hybrid/diversity reranking until after candidate aggregation.
-
-Local five-user profiling before the optimization showed roughly 6.9 seconds mean per-user hybrid latency. After the optimization, the same profiler showed roughly 0.58 seconds mean per-user latency. A ten-user content-only evaluation smoke showed `hybrid_content` mean latency around 664 ms.
-
-A real SBERT + FAISS evaluation baseline was also added behind `--include-sbert-faiss`. A 1,000-row smoke index produced `sbert_faiss_content` rows successfully, but this is not a full-catalog benchmark. Build full SBERT + FAISS artifacts before comparing it against the other baselines.
+`hybrid_content` mean latency dropped from 13,491.9 ms in the pre-optimization run (commit `c2793c4` batched watch-history seed similarity and deferred hybrid/diversity rerank) to 1,320.7 ms here, an order-of-magnitude improvement on the same 25-user slice. SBERT+FAISS is the fastest semantic-aware option at 36.1 ms mean — comparable to popularity and faster than TF-IDF content scoring.
 
 ## Conclusions
 
-- The evaluation flow now covers every currently available baseline.
-- `hybrid_content` only clearly beats popularity at K=20 in this run.
-- `popularity` remains a strong simple baseline at K=10.
-- `semantic_content` currently means semantic-LSA, not real SBERT/FAISS, and did not produce hits in this run.
+- The evaluation flow now covers every available baseline, including the real SBERT+FAISS full-catalog index (79,477 movies, 384-dim).
+- `hybrid_content` is the strongest top-N model at K=20 by recall, hit rate, NDCG, MAP, and MRR.
+- `popularity` remains a strong simple baseline at K=10 and slightly edges hybrid on NDCG@10 due to rank position.
+- `sbert_faiss_content` reaches broader catalog coverage and higher novelty than TF-IDF content, but does not produce relevance hits on this 15-user holdout slice — same outcome as `tfidf_content` and `semantic_content`, which all rely on content seeds rather than user history.
 - `svd_topk` produced one K=20 hit pattern but did not beat hybrid or popularity.
 - SVD rating prediction works and has RMSE 0.7241 / MAE 0.5097 on the sampled holdout.
-- The next technical priority should be regenerating a full post-optimization report before making model-quality claims.
+- The next investigation should widen the user slice and the holdout to make the content-only baselines comparable on relevance, not just on cost and coverage.
 
 ## Caveats
 

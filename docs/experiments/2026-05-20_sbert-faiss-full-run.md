@@ -32,7 +32,7 @@
   - 5-user smoke JSON has `top_n.sbert_faiss_content` populated.
   - `tests.test_sbert_faiss` exit code 0.
 - **Expected outcome:** Full-catalog artifacts ready on disk; SBERT path is now exercisable by both the evaluation runner and (later) the Streamlit app. Decision criterion is binary: smoke produces `sbert_faiss_content` rows, or this item is reopened.
-- **DONE (commit `<pending>`):** Full-catalog SBERT+FAISS artifacts built under `artifacts/indexes/sbert_faiss/`. Unit tests and a 5-user smoke evaluation both passed; the SBERT path is now exercisable end-to-end.
+- **DONE (commit `3234442`):** Full-catalog SBERT+FAISS artifacts built under `artifacts/indexes/sbert_faiss/`. Unit tests and a 5-user smoke evaluation both passed; the SBERT path is now exercisable end-to-end.
   - Metadata: `row_count = 79477`, `embedding_dim = 384`, `model_name = sentence-transformers/all-MiniLM-L6-v2`, `batch_size = 64`, `created_at = 2026-05-20T06:35:50Z`.
   - On-disk artifacts (all gitignored under `artifacts/`): `sbert_faiss.index` (~116 MB), `embeddings.npy` (~116 MB), `movie_ids.csv` (~515 KB), `metadata.json` (381 B).
   - Smoke: `tests.test_sbert_faiss` 2/2 OK; `evaluate_baselines.py --max-users 5 --k 5 --include-sbert-faiss` produced a populated `top_n.sbert_faiss_content` block (5 evaluated users, 22 unique items, no `sbert_faiss_error`).
@@ -69,7 +69,16 @@
   - In the new CSV, `sbert_faiss_content` exists at K=5, 10, 20 with `evaluated_user_count >= 1`.
   - `docs/08_evaluation_results_report.md` no longer contains the literal `13,491.9 ms`.
 - **Expected outcome:** A faithful, repeatable report that future agents can quote without needing the "actually that's stale" footnote. Decision criterion: every table reflects the new run; no number in the report contradicts `metrics_summary.csv`.
-- **DONE / DROPPED:** (filled in after commit; include a small table with popularity / hybrid_content / sbert_faiss_content K=10 rows from the new run)
+- **DONE (commit `<pending>`):** Re-ran the 25-user evaluation with all baselines plus `--include-sbert-faiss`. `docs/08_evaluation_results_report.md` rewritten to use post-optimization latencies and to include `sbert_faiss_content` in both K tables and the latency table.
+  - Metric / result (K=10):
+    | Model | Precision@10 | Recall@10 | NDCG@10 | Latency mean |
+    |---|---:|---:|---:|---:|
+    | popularity | 0.0133 | 0.1333 | 0.0430 | 38.9 ms |
+    | hybrid_content | 0.0133 | 0.1333 | 0.0401 | 1,320.7 ms |
+    | sbert_faiss_content | 0.0000 | 0.0000 | 0.0000 | 36.1 ms |
+  - Run id: `artifacts/evaluation/metrics_summary.csv` (22 rows incl. header; mirrored timestamped copy on the same `2026-05-20` date) and `artifacts/evaluation/run_config.json` confirms `include_sbert_faiss = true`.
+  - `hybrid_content` mean latency 13,491.9 ms → 1,320.7 ms — well under the 2,000 ms pre-commit gate. SBERT+FAISS clocks 36.1 ms mean, the fastest semantic-aware option.
+  - Decision: shipped to Faz 3.
 
 ## 3) Wire SBERT semantic mode into the Streamlit Content-Based page
 
