@@ -114,7 +114,7 @@
   - Per-segment `evaluated_user_count` varies across seeds (proof the slice shifted across seeds within the segment).
   - DONE marker captures, per seed: bucket sizes and the per-bucket ALS / LightFM / popularity / sbert_faiss / tfidf NDCG@10.
 - **Expected outcome:** A 3-run segmented dataset for the synthesis. Decision criterion: three artifacts exist; bucket counts non-degenerate in each.
-- **DONE (commit to be backfilled):** Ran the remaining two seeds (7 and 1337) at the same `--max-users 300 --holdout-count 3 --segment-by-history` shape. Combined with item 2's seed-42 artifact, the 3-seed dataset is complete.
+- **DONE (commit `e532888`):** Ran the remaining two seeds (7 and 1337) at the same `--max-users 300 --holdout-count 3 --segment-by-history` shape. Combined with item 2's seed-42 artifact, the 3-seed dataset is complete.
   - Bucket sizes are stable across seeds (counts shift modestly):
 
     | seed | cold_0_10 | warm_10_50 | regular_50_200 | heavy_200_plus |
