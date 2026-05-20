@@ -80,7 +80,21 @@ class TestAlsRecommender(unittest.TestCase):
         self.assertNotIn(2, recommendations["movieId"].tolist())
         self.assertEqual(recommendations.columns.tolist(), BASE_OUTPUT_COLUMNS + ["similarity_score"])
         self.assertEqual(artifacts.model.last_call["N"], 3)
-        self.assertTrue(artifacts.model.last_call["filter_already_liked_items"])
+        self.assertFalse(artifacts.model.last_call["filter_already_liked_items"])
+
+    def test_als_recommendations_excludes_watched_via_post_filter(self):
+        artifacts = fixture_artifacts()
+        recommendations = als_recommendations_for_user(
+            10,
+            artifacts,
+            fixture_movies(),
+            watched_movie_ids=[3],
+            top_n=2,
+        )
+
+        self.assertEqual(recommendations["movieId"].tolist(), [2, 1])
+        self.assertNotIn(3, recommendations["movieId"].tolist())
+        self.assertFalse(artifacts.model.last_call["filter_already_liked_items"])
 
     def test_als_recommendations_unknown_user_returns_empty_frame(self):
         recommendations = als_recommendations_for_user(

@@ -191,11 +191,14 @@ def als_recommendations_for_user(
     if requested_n <= 0:
         return empty_als_recommendations(movies_for_output)
 
+    # user_items was built from the full pre-split rating matrix, so it
+    # contains evaluation-time holdout interactions; rely on the post-hoc
+    # filter_watched_movies (train-only) for exclusion instead.
     item_positions, scores = artifacts.model.recommend(
         int(user_position),
         artifacts.user_items[int(user_position)],
         N=requested_n,
-        filter_already_liked_items=True,
+        filter_already_liked_items=False,
     )
     item_positions = np.asarray(item_positions).reshape(-1)
     scores = np.asarray(scores, dtype=np.float64).reshape(-1)
