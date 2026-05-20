@@ -183,7 +183,7 @@ Then evaluate the prebuilt artifact:
   --als-artifacts-dir artifacts/models/als
 ```
 
-Current local findings are summarized in `docs/08_evaluation_results_report.md`. In short: popularity is a strong simple baseline at K=10, hybrid content showed the best K=20 ranking signal in the documented run, and hybrid latency was later reduced substantially by batching watch-history candidate generation. Treat these as local directional results, not final benchmark claims.
+Current local findings are summarized in `docs/08_evaluation_results_report.md`. In short: on the latest 100-user run, LightFM WARP leads every ranking metric at K=10 and K=20 (NDCG@10 = 0.1427) while staying in the fast tier at ~44 ms mean latency; hybrid content is the runner-up on NDCG but the slowest baseline at ~1.5 s mean latency; SBERT+FAISS, TF-IDF, semantic-LSA, and popularity sit below the two leaders on ranking; Implicit ALS and SVD top-K produced no relevance hits on this slice and need follow-up investigation before they can be compared on quality. Treat these as local directional results, not final benchmark claims.
 
 ## 📖 Usage
 
