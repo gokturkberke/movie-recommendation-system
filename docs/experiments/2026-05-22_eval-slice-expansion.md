@@ -156,7 +156,7 @@
   - `recall_at_10` numbers are mechanically smaller than items 2 and 3 (denominator is 3 instead of 1); the plan acknowledges this in item 5's paragraph.
   - DONE marker captures per-seed evaluated_user_count and the same per-model K=10 metrics for the three runs.
 - **Expected outcome:** A 3-run dataset for hypothesis H3. Decision criterion: artifacts exist; the holdout=3 semantics is correctly noted in the synthesis.
-- **DONE (commit to be backfilled):** Ran the 9-model evaluation three times at `--max-users 300 --holdout-count 3 --user-sample-seed` in `42, 7, 1337`. Each run took ~10 minutes wall time; chained as a single background bash for ~30 minutes total. H3 confirmed: ALS > LightFM > everything else holds in 3 of 3 seeds.
+- **DONE (commit `3c6c4b0`):** Ran the 9-model evaluation three times at `--max-users 300 --holdout-count 3 --user-sample-seed` in `42, 7, 1337`. Each run took ~10 minutes wall time; chained as a single background bash for ~30 minutes total. H3 confirmed: ALS > LightFM > everything else holds in 3 of 3 seeds.
   - Per-seed K=10 NDCG:
 
     | seed | evaluated_user_count | als_implicit | lightfm_warp | hybrid_content | popularity | sbert_faiss | tfidf_content | svd_topk |
