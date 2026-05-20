@@ -186,7 +186,13 @@
   - 5-user smoke produces a populated `als_implicit` block with mean latency under 300 ms.
   - `.venv/bin/python -m unittest discover -s tests` still 100% green.
 - **Expected outcome:** ALS joins the comparison table next to LightFM and SVD. Decision criterion: smoke produces `als_implicit` rows; no Streamlit regression.
-- **DONE / DROPPED:** (filled in after commit; include train wall time and the 5-user smoke metric triple)
+- **DONE (commit `c956ea5`):** Added the Implicit ALS offline baseline with prebuilt artifact loading, `--include-als` CLI wiring, config defaults, training script, README setup notes, and unit coverage. The runner now records `als_implicit` when artifacts load and returns `als_error` instead of crashing when ALS artifact files are unavailable.
+  - Install note: `pip install implicit` installed `implicit 0.7.3` from the macOS arm64 wheel.
+  - Train wall time: 98.19 seconds for the default artifact at `artifacts/models/als/`.
+  - Metadata: `row_count = 16863053`, `user_count = 305098`, `item_count = 40441`, `factors = 64`, `regularization = 0.01`, `iterations = 20`, `alpha = 40.0`, `use_gpu = false`.
+  - 5-user smoke (`--include-als --als-artifacts-dir artifacts/models/als`): `precision_at_5 = 0.0000`, `ndcg_at_5 = 0.0000`, `latency_mean_ms = 7.1`; no `als_error` field.
+  - Verification: `tests.test_als_recommender` 3/3 OK, `.venv/bin/python -m unittest discover -s tests` 56/56 OK, missing-artifact smoke returns an `als_error` with the missing file list.
+  - Decision: proceed to Item 4.
 
 ## 4) Combined 100-user × 9-model evaluation and report refresh
 
