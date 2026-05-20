@@ -74,7 +74,18 @@
   - For at least 2 of the 3 runs, `top_n.als_implicit.10.evaluated_user_count` differs from the canonical 55 -- proof the slice actually shifted.
   - The DONE marker captures, for each seed: `evaluated_user_count`, `als_implicit.10.{precision,recall,ndcg,hit_rate}`, `lightfm_warp.10.{ndcg,hit_rate}`, `hybrid_content.10.{ndcg,hit_rate}`.
 - **Expected outcome:** A 3-run dataset for hypothesis H1. Decision criterion: artifacts exist; the three seed-specific evaluated_user_counts are not all identical.
-- **DONE / DROPPED:**
+- **DONE (run completed; commit hash filled below):** Ran the canonical 9-model evaluation three times with `--user-sample-seed` in `42, 7, 1337` at `--max-users 100 --holdout-count 1`. Each run took ~5 minutes wall time. The slice genuinely shifted across seeds: `evaluated_user_count` at K=10 landed at 54 / 52 / 54 versus the deterministic-first-N reference of 55.
+  - Per-seed K=10 NDCG triples for the top-5 ranking models:
+
+    | seed | evaluated_user_count | als_implicit | lightfm_warp | hybrid_content | popularity | sbert_faiss |
+    |---:|---:|---:|---:|---:|---:|---:|
+    | 42 | 54 | 0.1903 | 0.0763 | 0.0241 | 0.0260 | 0.0450 |
+    | 7 | 52 | 0.2141 | 0.0921 | 0.0317 | 0.0453 | 0.0192 |
+    | 1337 | 54 | 0.1676 | 0.0574 | 0.0117 | 0.0117 | 0.0058 |
+
+  - H1 confirmation: `als_implicit > lightfm_warp > hybrid_content` ordering holds in 3 of 3 seeds. ALS NDCG@10 range 0.1676 to 0.2141 (std approx 0.024, ~12% relative variation against the mean of 0.1907). LightFM NDCG@10 range 0.0574 to 0.0921. Hybrid NDCG@10 range 0.0117 to 0.0317.
+  - Run ids: `artifacts/evaluation/metrics_summary_2026-05-20T19-23-55Z.{csv,json}` (seed 42), `artifacts/evaluation/metrics_summary_2026-05-20T19-29-04Z.{csv,json}` (seed 7), `artifacts/evaluation/metrics_summary_2026-05-20T19-33-46Z.{csv,json}` (seed 1337). All gitignored.
+  - Decision: proceed to Item 3. ALS leadership is seed-robust on this slice size; the next axis to verify is sample size.
 
 ## 3) Single-seed run at 300 users / holdout=1
 
