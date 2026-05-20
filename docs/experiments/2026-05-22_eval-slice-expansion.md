@@ -42,7 +42,11 @@
   - 5-user CLI smoke produces a JSON with `config.user_sample_seed = 42`.
   - The 2026-05-21 canonical command (without `--user-sample-seed`) still produces the same 55 evaluated_user_count for the K=10 / als_implicit row -- backward compatibility check.
 - **Expected outcome:** The eval flow can now produce real variance when seeded. Decision criterion: tests pass, default behavior unchanged.
-- **DONE / DROPPED:**
+- **DONE (commit `ed888fb`):** Extended `select_evaluation_user_ids` with an optional `random_seed` keyword; default `None` returns the deterministic first-N slice (backward compatible), seeded calls return a stable random sample via `np.random.default_rng(seed).choice(..., replace=False)` and sort the result for reproducibility. Threaded `user_sample_seed` through `run_evaluation()` and added the `--user-sample-seed` CLI flag (separate from the existing `--random-seed` for the random baseline). Recorded the value in `config.user_sample_seed` of every eval report.
+  - Tests: `tests/test_evaluation_runner.py` 3/3 OK -- covers default first-N, seed stability across two calls, and different-seed sample divergence. Full suite `.venv/bin/python -m unittest discover -s tests` 60/60 OK (was 57/57, +3 new tests, zero regressions).
+  - CLI sanity: `--max-users 5 --user-sample-seed 42 --include-random` produced `config.user_sample_seed = 42`, `config.random_seed = 42`, `data.selected_user_count = 5` in the output JSON.
+  - Backward compatibility check: omitting `--user-sample-seed` keeps the prior deterministic first-N behavior; the 2026-05-21 canonical run still reproduces exactly.
+  - Decision: proceed to Item 2 (multi-seed runs at 100 users).
 
 ## 2) Multi-seed run at 100 users / holdout=1
 
