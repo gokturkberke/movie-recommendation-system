@@ -12,3 +12,4 @@ scipy
 PyYAML
 sentence-transformers
 faiss-cpu
+lightfm

@@ -21,6 +21,10 @@ from experimental.semantic_embeddings import (
     fit_semantic_embeddings,
     semantic_recommendations_for_seed_ids,
 )
+from experimental.lightfm_recommender import (
+    lightfm_recommendations_for_user,
+    load_lightfm_artifacts,
+)
 from experimental.sbert_faiss import (
     load_sbert_faiss_index,
     sbert_faiss_recommendations_for_seed_ids,
@@ -324,6 +328,42 @@ def make_sbert_faiss_per_user(
     return recommend
 
 
+def make_lightfm_per_user(
+    artifacts,
+    movies,
+    train,
+    top_n,
+):
+    ratings = train.copy() if train is not None else pd.DataFrame()
+    watched_by_user = {}
+    if not ratings.empty and {"userId", "movieId"}.issubset(ratings.columns):
+        watched_by_user = (
+            ratings[["userId", "movieId"]]
+            .dropna()
+            .groupby("userId")["movieId"]
+            .apply(list)
+            .to_dict()
+        )
+
+    def recommend(user_id):
+        if artifacts is None or movies is None or movies.empty:
+            return pd.DataFrame()
+        recommendations = lightfm_recommendations_for_user(
+            user_id,
+            artifacts,
+            movies,
+            watched_movie_ids=watched_by_user.get(user_id, []),
+            top_n=top_n,
+        )
+        if recommendations.empty:
+            return recommendations
+        recommendations = recommendations.copy()
+        recommendations["userId"] = user_id
+        return recommendations
+
+    return recommend
+
+
 def run_per_user(recommend_for_user, user_ids, measure_latency):
     if measure_latency:
         return measure_per_user_latency(recommend_for_user, user_ids)
@@ -484,6 +524,7 @@ def run_evaluation(
     include_content=False,
     include_semantic=False,
     include_sbert_faiss=False,
+    include_lightfm=False,
     include_svd_topk=False,
     include_svd=False,
     measure_latency=True,
@@ -492,6 +533,7 @@ def run_evaluation(
     semantic_components=64,
     semantic_random_state=42,
     sbert_faiss_index_dir=None,
+    lightfm_artifacts_dir=None,
     example_count=0,
     include_reasons=False,
 ):
@@ -555,6 +597,17 @@ def run_evaluation(
         except (FileNotFoundError, ImportError, ValueError) as exc:
             sbert_faiss_error = str(exc)
 
+    lightfm_artifacts = None
+    lightfm_error = None
+    resolved_lightfm_dir = None
+    if include_lightfm:
+        lightfm_defaults = EVALUATION_DEFAULTS.get("lightfm") or {}
+        resolved_lightfm_dir = project_path(lightfm_artifacts_dir or lightfm_defaults.get("artifacts_dir", "artifacts/models/lightfm"))
+        try:
+            lightfm_artifacts = load_lightfm_artifacts(resolved_lightfm_dir)
+        except (FileNotFoundError, ImportError, ValueError) as exc:
+            lightfm_error = str(exc)
+
     report = {
         "config": {
             "max_users": int(max_users),
@@ -567,6 +620,7 @@ def run_evaluation(
             "include_content": bool(include_content),
             "include_semantic": bool(include_semantic),
             "include_sbert_faiss": bool(include_sbert_faiss),
+            "include_lightfm": bool(include_lightfm),
             "include_svd_topk": bool(include_svd_topk),
             "include_svd": bool(include_svd),
             "measure_latency": bool(measure_latency),
@@ -575,6 +629,7 @@ def run_evaluation(
             "semantic_random_state": int(semantic_random_state),
             "semantic_method": "tfidf+truncated_svd" if include_semantic else None,
             "sbert_faiss_index_dir": str(resolved_index_dir) if include_sbert_faiss else None,
+            "lightfm_artifacts_dir": str(resolved_lightfm_dir) if include_lightfm else None,
             "example_count": int(example_count),
             "include_reasons": bool(include_reasons),
         },
@@ -593,6 +648,8 @@ def run_evaluation(
         report["examples"] = {}
     if sbert_faiss_error:
         report["sbert_faiss_error"] = sbert_faiss_error
+    if lightfm_error:
+        report["lightfm_error"] = lightfm_error
 
     def record(result):
         report["top_n"][result["name"]] = result["metrics"]
@@ -733,6 +790,27 @@ def run_evaluation(
         record(evaluate_baseline(
             "sbert_faiss_content",
             sbert_faiss_closure,
+            eval_user_ids,
+            holdout,
+            train,
+            movies,
+            k_values,
+            measure_latency,
+            score_col="similarity_score",
+            baseline_recommendations=popularity_recommendations_df,
+            positive_threshold=positive_threshold,
+        ))
+
+    if include_lightfm and lightfm_artifacts is not None:
+        lightfm_closure = make_lightfm_per_user(
+            lightfm_artifacts,
+            movies,
+            train,
+            max_k,
+        )
+        record(evaluate_baseline(
+            "lightfm_warp",
+            lightfm_closure,
             eval_user_ids,
             holdout,
             train,

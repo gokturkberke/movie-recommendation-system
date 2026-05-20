@@ -64,6 +64,13 @@ evaluation:
     model_name: sentence-transformers/all-MiniLM-L6-v2
     batch_size: 64
     index_dir: artifacts/indexes/sbert_faiss
+  lightfm:
+    artifacts_dir: artifacts/models/lightfm
+    no_components: 64
+    loss: warp
+    epochs: 20
+    num_threads: 4
+    positive_threshold: 4.0
 
 tmdb:
   timeout_seconds: 8

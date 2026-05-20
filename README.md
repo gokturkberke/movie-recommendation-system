@@ -43,10 +43,11 @@ Implemented for offline evaluation only:
 * Semantic-LSA baseline (`--include-semantic`), built from TF-IDF + TruncatedSVD.
 * SVD top-K and SVD rating prediction baselines.
 * SBERT + FAISS semantic baseline (`--include-sbert-faiss`) using prebuilt local index artifacts.
+* LightFM WARP baseline (`--include-lightfm`) using prebuilt local artifacts.
 
 Future work:
 
-* LightFM / Implicit ALS / graph / sequence models.
+* Implicit ALS / graph / sequence models.
 * Larger, repeated evaluation runs before claiming model quality improvements.
 
 ## 🛠️ Technologies and Libraries Used
@@ -57,6 +58,7 @@ Future work:
     * Scikit-learn (TF-IDF, Cosine Similarity)
     * Surprise (SVD algorithm, model training, and evaluation)
     * SentenceTransformers and FAISS for the optional SBERT semantic evaluation baseline
+    * LightFM for the optional WARP offline evaluation baseline
 * **Text Similarity:** TheFuzz (FuzzyWuzzy)
 * **Web Interface:** Streamlit
 * **API Interaction:** Requests
@@ -150,6 +152,21 @@ For a quick smoke build, add `--sample-size 1000` and write to `/private/tmp/sbe
   --sbert-faiss-index-dir artifacts/indexes/sbert_faiss
 ```
 This is evaluation-only and does not build embeddings during Streamlit startup.
+
+To build and evaluate the LightFM WARP baseline, first create the local model artifacts:
+```bash
+.venv/bin/python scripts/train_lightfm_model.py \
+  --output-dir artifacts/models/lightfm
+```
+Then evaluate the prebuilt artifact:
+```bash
+.venv/bin/python scripts/evaluate_baselines.py \
+  --max-users 5 --k 5 \
+  --include-lightfm \
+  --lightfm-artifacts-dir artifacts/models/lightfm
+```
+
+Apple Silicon note: `lightfm==1.17` can fail during metadata generation on some Python 3.11/macOS arm64 environments with `AttributeError: 'dict' object has no attribute '__LIGHTFM_SETUP__'`. Retry with `pip install lightfm --no-build-isolation`. If that also fails, build from a temporary source checkout after replacing the setup sentinel with `import builtins; builtins.__LIGHTFM_SETUP__ = True`, or use a Linux/x86_64 host. Until LightFM is installed, the evaluation flag remains safe: the runner reports `lightfm_error` instead of crashing.
 
 Current local findings are summarized in `docs/08_evaluation_results_report.md`. In short: popularity is a strong simple baseline at K=10, hybrid content showed the best K=20 ranking signal in the documented run, and hybrid latency was later reduced substantially by batching watch-history candidate generation. Treat these as local directional results, not final benchmark claims.
 
