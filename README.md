@@ -44,10 +44,11 @@ Implemented for offline evaluation only:
 * SVD top-K and SVD rating prediction baselines.
 * SBERT + FAISS semantic baseline (`--include-sbert-faiss`) using prebuilt local index artifacts.
 * LightFM WARP baseline (`--include-lightfm`) using prebuilt local artifacts.
+* Implicit ALS baseline (`--include-als`) using prebuilt local artifacts.
 
 Future work:
 
-* Implicit ALS / graph / sequence models.
+* Graph / sequence models.
 * Larger, repeated evaluation runs before claiming model quality improvements.
 
 ## 🛠️ Technologies and Libraries Used
@@ -59,6 +60,7 @@ Future work:
     * Surprise (SVD algorithm, model training, and evaluation)
     * SentenceTransformers and FAISS for the optional SBERT semantic evaluation baseline
     * LightFM for the optional WARP offline evaluation baseline
+    * Implicit for the optional ALS offline evaluation baseline
 * **Text Similarity:** TheFuzz (FuzzyWuzzy)
 * **Web Interface:** Streamlit
 * **API Interaction:** Requests
@@ -167,6 +169,19 @@ Then evaluate the prebuilt artifact:
 ```
 
 Apple Silicon note: `lightfm==1.17` can fail during metadata generation on some Python 3.11/macOS arm64 environments with `AttributeError: 'dict' object has no attribute '__LIGHTFM_SETUP__'`. Retry with `pip install lightfm --no-build-isolation`. If that also fails, build from a temporary source checkout after replacing the setup sentinel with `import builtins; builtins.__LIGHTFM_SETUP__ = True`, or use a Linux/x86_64 host. Until LightFM is installed, the evaluation flag remains safe: the runner reports `lightfm_error` instead of crashing.
+
+To build and evaluate the Implicit ALS baseline, first create the local model artifacts:
+```bash
+.venv/bin/python scripts/train_als_model.py \
+  --output-dir artifacts/models/als
+```
+Then evaluate the prebuilt artifact:
+```bash
+.venv/bin/python scripts/evaluate_baselines.py \
+  --max-users 5 --k 5 \
+  --include-als \
+  --als-artifacts-dir artifacts/models/als
+```
 
 Current local findings are summarized in `docs/08_evaluation_results_report.md`. In short: popularity is a strong simple baseline at K=10, hybrid content showed the best K=20 ranking signal in the documented run, and hybrid latency was later reduced substantially by batching watch-history candidate generation. Treat these as local directional results, not final benchmark claims.
 

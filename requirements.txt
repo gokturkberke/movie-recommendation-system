@@ -13,3 +13,4 @@ PyYAML
 sentence-transformers
 faiss-cpu
 lightfm
+implicit

@@ -71,6 +71,13 @@ evaluation:
     epochs: 20
     num_threads: 4
     positive_threshold: 4.0
+  als:
+    artifacts_dir: artifacts/models/als
+    factors: 64
+    regularization: 0.01
+    iterations: 20
+    alpha: 40.0
+    positive_threshold: 4.0
 
 tmdb:
   timeout_seconds: 8
