@@ -39,7 +39,11 @@
   - 5-user smoke produces a JSON with `config.segment_by_history=true` and segment blocks attached.
   - Backward compatibility: omitting the flag produces a JSON without `segments` blocks; the 2026-05-22 canonical run still reproduces.
 - **Expected outcome:** Segmentation is available behind a flag and exercised by tests. Decision criterion: tests pass and the smoke JSON has the expected new keys.
-- **DONE / DROPPED:**
+- **DONE (commit `9454cbd`):** Added `segment_users_by_history` to `src/evaluation.py`, extended `build_metric_report` and `evaluate_baseline` with an optional `segment_user_ids` kwarg, wired `--segment-by-history` and `--segment-bounds` CLI flags, and threaded `segment_by_history` / `segment_bounds` through `run_evaluation()`. The segment map is computed once from `train` and reused for every `evaluate_baseline` call. The config block records `segment_by_history`, `segment_bounds`, and the resolved `segment_definitions`.
+  - Tests: 4 new unit tests under `tests/test_evaluation_runner.py` (default bucket semantics, open upper boundary, segment-equals-aggregate when one segment covers all users, segment-skipped-when-no-positive-holdout). Full suite 64/64 OK (was 60/60).
+  - CLI sanity: `--max-users 10 --include-random --segment-by-history` produced `config.segment_by_history=true`, `config.segment_definitions` populated with the 4 default buckets, and `top_n.random.5.segments` with `warm_10_50` (3 users) and `regular_50_200` (2 users) buckets populated (cold and heavy empty for this small deterministic slice -- expected).
+  - Backward compat: omitting the flag produced `segment_by_history=false`, `segment_definitions=null`, no `segments` block in any model's K block.
+  - Decision: proceed to Item 2.
 
 ## 2) Segmented run at 300 users / holdout=3 / single seed 42
 
