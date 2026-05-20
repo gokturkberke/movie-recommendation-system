@@ -162,7 +162,8 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Conclusions ("`
   - The "Deferred / Future" section of this plan file lists the SVD top-K ranking improvement.
   - No code file is modified by this item.
 - **Expected outcome:** Future agents reading the report know SVD top-K's zero is expected and where to look if they want to fix it. Decision criterion: the subsection is in the report and the deferred line is in this plan file.
-- **DONE / DROPPED:**
+- **DONE (commit `0fc788a`):** Added a three-paragraph "Why SVD top-K stays at zero hits" subsection to `docs/08_evaluation_results_report.md` (between Latency Findings and Conclusions) covering the code path, the item 1 diagnostic numbers (ranks 94 / 20 / 392 / 14171 / 10934 across the 5 sampled users), and the framing as an explicit-rating SVD ranking weakness rather than a wiring bug. The Conclusions block now references the subsection by name. No code changes; the SVD ranking improvement remains listed in this plan's Deferred section below.
+  - The audit trail closes here: items 1 through 4 are all DONE, ALS is non-zero on the canonical run, SVD top-K is explained, and the deferred SVD ranking improvement is the seed for a future plan.
 
 ## Deferred / Future (out of this plan)
 
