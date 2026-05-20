@@ -112,7 +112,24 @@
   - `data.evaluated_user_count` reaches at least 150 (~ 55% of 300 expected based on the 100-user rate).
   - DONE marker captures evaluated_user_count and the same per-model K=10 metrics as item 2.
 - **Expected outcome:** A reference point that separates "more users" from "more holdout". Decision criterion: ordering of als > lightfm > hybrid on NDCG@10 holds, or the deviation is documented.
-- **DONE / DROPPED:**
+- **DONE (commit to be filled below):** Ran the canonical 9-model evaluation at `--max-users 300 --user-sample-seed 42 --holdout-count 1`. Evaluated user count landed at 177 of 300 selected (~59% positive-holdout rate, in line with the 55% rate at 100 users). H2 confirmed: ALS > LightFM > hybrid ordering holds, and ALS leads by an even wider margin.
+  - K=10 metrics:
+
+    | Model | NDCG@10 | HitRate@10 | Precision@10 | Recall@10 | Latency mean |
+    |---|---:|---:|---:|---:|---:|
+    | als_implicit | 0.2196 | 0.3616 | 0.0362 | 0.3616 | 6.7 ms |
+    | lightfm_warp | 0.1173 | 0.2147 | 0.0215 | 0.2147 | 37.3 ms |
+    | popularity | 0.0467 | 0.0791 | 0.0079 | 0.0791 | 36.5 ms |
+    | tfidf_content | 0.0389 | 0.0621 | 0.0062 | 0.0621 | 47.5 ms |
+    | hybrid_content | 0.0383 | 0.0734 | 0.0073 | 0.0734 | 1,368.1 ms |
+    | sbert_faiss_content | 0.0316 | 0.0621 | 0.0062 | 0.0621 | 42.9 ms |
+    | semantic_content | 0.0184 | 0.0282 | 0.0028 | 0.0282 | 75.4 ms |
+    | svd_topk | 0.0120 | 0.0339 | 0.0034 | 0.0339 | 182.3 ms |
+    | random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 14.1 ms |
+
+  - Notable shifts versus the 100-user multi-seed runs (item 2): ALS NDCG@10 rises to 0.2196 (vs 0.1676 - 0.2141 band at 100 users), reflecting more signal at the larger sample. SVD top-K, previously stuck at zero at K=10, now produces a small non-zero band (NDCG 0.0120) -- a few of the 177 evaluated users had a holdout that landed inside SVD's narrow popular-favorable top-K. At 300 users `popularity` slightly edged out `hybrid_content` on NDCG (0.0467 vs 0.0383) -- a fresh ordering wrinkle worth flagging in item 5's synthesis.
+  - Run id: `artifacts/evaluation/metrics_summary_2026-05-20T19-46-01Z.{csv,json}` (gitignored).
+  - Decision: proceed to Item 4. ALS > LightFM > hybrid is robust on both seed and sample-size axes at holdout=1.
 
 ## 4) Multi-seed run at 300 users / holdout=3
 
