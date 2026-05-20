@@ -114,7 +114,30 @@
   - Per-segment `evaluated_user_count` varies across seeds (proof the slice shifted across seeds within the segment).
   - DONE marker captures, per seed: bucket sizes and the per-bucket ALS / LightFM / popularity / sbert_faiss / tfidf NDCG@10.
 - **Expected outcome:** A 3-run segmented dataset for the synthesis. Decision criterion: three artifacts exist; bucket counts non-degenerate in each.
-- **DONE / DROPPED:**
+- **DONE (commit to be backfilled):** Ran the remaining two seeds (7 and 1337) at the same `--max-users 300 --holdout-count 3 --segment-by-history` shape. Combined with item 2's seed-42 artifact, the 3-seed dataset is complete.
+  - Bucket sizes are stable across seeds (counts shift modestly):
+
+    | seed | cold_0_10 | warm_10_50 | regular_50_200 | heavy_200_plus |
+    |---:|---:|---:|---:|---:|
+    | 42 | 41 | 117 | 70 | 31 |
+    | 7 | 45 | 103 | 67 | 30 |
+    | 1337 | 46 | 113 | 71 | 35 |
+
+  - Per-segment NDCG@10 per seed (ALS / LightFM):
+
+    | seed | ALS cold | ALS warm | ALS regular | ALS heavy | LightFM cold | LightFM warm | LightFM regular | LightFM heavy |
+    |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+    | 42 | 0.5149 | 0.3177 | 0.1600 | 0.0406 | 0.3071 | 0.1655 | 0.0667 | 0.0280 |
+    | 7 | 0.3763 | 0.3176 | 0.0717 | 0.1080 | 0.2315 | 0.1041 | 0.0634 | 0.0413 |
+    | 1337 | 0.4920 | 0.2106 | 0.1205 | 0.0504 | 0.2717 | 0.1289 | 0.0385 | 0.0392 |
+
+  - Key cross-seed orderings:
+    - `als_implicit > lightfm_warp` holds in 3 of 3 seeds in every segment (12/12 segment-seed cells).
+    - `lightfm_warp > popularity` holds in 3 of 3 seeds in cold and warm; flips in regular and heavy where popularity occasionally edges close.
+    - Both ALS and LightFM peak in `cold_0_10` and trough in `heavy_200_plus` -- the opposite of what classical CF wisdom predicts. The 2026-05-22 leakage caveat is the most likely driver and is the headline of item 5's narrative.
+
+  - Run ids: `metrics_summary_2026-05-20T21-09-15Z` (seed 42, from item 2), `metrics_summary_2026-05-20T21-23-38Z` (seed 7), `metrics_summary_2026-05-20T21-37-33Z` (seed 1337). All gitignored.
+  - Decision: proceed to Item 5 (synthesis). The dataset cleanly supports a "leakage amplified in cold-start" finding and a model-by-segment leaderboard.
 
 ## 4) Synthesis -- "Cold-start segmentation" subsection in the evaluation report
 
