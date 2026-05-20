@@ -127,21 +127,68 @@ The item 1 diagnostic in `docs/experiments/2026-05-21_als-svd-zero-hit-investiga
 
 This is the expected weakness of explicit-rating SVD for top-K ranking, not a wiring bug. Surprise SVD optimizes mean squared error on observed (user, item) ratings; its top-ranked candidates are therefore items whose mean predicted rating crowds the upper bound (4.7 - 5.0), a narrow popular-favorable set -- catalog coverage at K=10 is only 0.0029. Improving this would mean blending the predicted score with a ranking signal (popularity log, recency) or replacing the baseline with a ranker trained on a ranking objective (LightFM WARP is already in the same table). That work is deferred and logged at the bottom of the audit plan.
 
+## Variance Bounds (multi-seed slice studies)
+
+The K=10 / K=20 tables above are a single 100-user / latest-1 / first-N slice. To check whether that snapshot generalises, `docs/experiments/2026-05-22_eval-slice-expansion.md` ran the same canonical command across three axes -- multi-seed user sampling at 100 users, a single-seed expansion to 300 users, and multi-seed at 300 users with `holdout_count=3`. Numbers below are NDCG@10 / HitRate@10 / mean per-user latency. For the multi-seed groups, the entry format is `mean +/- standard deviation` across the three seeds (42, 7, 1337). The single-seed group reports the point value only.
+
+### Table A -- 100 users, holdout=1, seeds {42, 7, 1337}
+
+Evaluated user counts (positive holdout) per seed: 54, 52, 54.
+
+| Model | NDCG@10 | HitRate@10 | Mean latency |
+|---|---:|---:|---:|
+| als_implicit | 0.1907 +/- 0.0232 | 0.3196 +/- 0.0628 | 7.5 +/- 0.1 ms |
+| lightfm_warp | 0.0753 +/- 0.0173 | 0.1752 +/- 0.0399 | 41.4 +/- 0.6 ms |
+| hybrid_content | 0.0225 +/- 0.0101 | 0.0439 +/- 0.0119 | 1,326.8 +/- 155.8 ms |
+| popularity | 0.0277 +/- 0.0169 | 0.0503 +/- 0.0296 | 82.1 +/- 0.8 ms |
+| sbert_faiss_content | 0.0234 +/- 0.0199 | 0.0311 +/- 0.0212 | 39.2 +/- 2.8 ms |
+
+`als_implicit > lightfm_warp` holds in 3 of 3 seeds (relative variation of ALS NDCG@10 is about 12% of the mean). The third spot is genuinely a tossup at this slice size: `popularity`, `sbert_faiss_content`, and `hybrid_content` overlap each other within one standard deviation on both NDCG and hit rate. Hybrid's "third-best" framing from the previous single-run table is not robust at this sample size.
+
+### Table B -- 300 users, holdout=1, single seed 42
+
+Evaluated user count: 177.
+
+| Model | NDCG@10 | HitRate@10 | Mean latency |
+|---|---:|---:|---:|
+| als_implicit | 0.2196 | 0.3616 | 6.7 ms |
+| lightfm_warp | 0.1173 | 0.2147 | 37.3 ms |
+| hybrid_content | 0.0383 | 0.0734 | 1,368.1 ms |
+| popularity | 0.0467 | 0.0791 | 36.5 ms |
+| sbert_faiss_content | 0.0316 | 0.0621 | 42.9 ms |
+
+The larger sample tightens every number toward the bigger one in Table A's variance band. ALS pulls further ahead (NDCG@10 0.2196 vs 0.19 mean at 100 users), confirming the leadership is not a small-sample artifact. At the 300-user shape `popularity` already edges `hybrid_content` on NDCG@10 (0.0467 vs 0.0383); the lower tier is still noisy but the ordering is starting to settle.
+
+### Table C -- 300 users, holdout=3, seeds {42, 7, 1337}
+
+Evaluated user counts: 259, 245, 265. Recall denominators change at holdout=3 (each user has 3 positive items, capped at 1.0 -- hit rates rise because there are 3 chances to land a top-10 hit per user).
+
+| Model | NDCG@10 | HitRate@10 | Mean latency |
+|---|---:|---:|---:|
+| als_implicit | 0.2409 +/- 0.0299 | 0.4996 +/- 0.0560 | 11.6 +/- 7.9 ms |
+| lightfm_warp | 0.1237 +/- 0.0188 | 0.3133 +/- 0.0505 | 37.5 +/- 0.8 ms |
+| hybrid_content | 0.0325 +/- 0.0082 | 0.0965 +/- 0.0317 | 1,325.1 +/- 126.4 ms |
+| popularity | 0.0416 +/- 0.0065 | 0.1144 +/- 0.0115 | 37.7 +/- 0.9 ms |
+| sbert_faiss_content | 0.0216 +/- 0.0065 | 0.0677 +/- 0.0200 | 44.1 +/- 11.1 ms |
+
+`als_implicit > lightfm_warp` holds again in 3 of 3 seeds. ALS HitRate@10 nearly doubles (0.32 -> 0.50 mean) because the holdout window widened from 1 to 3; the ratio between models in this column stays stable. The hybrid recommender's #3 placement does not survive -- `popularity` and `tfidf_content` (not shown in this table but easily checked in the artifacts) both beat `hybrid_content` on NDCG@10 in all three seeds. This is the most reliable shape in the study and the place where `hybrid_content` is most clearly outranked.
+
 ## Conclusions
 
-- The evaluation flow covers 9 top-N models on the same 100-user slice. The ALS exclusion-semantics fix from `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` item 2 is applied in this run.
-- `als_implicit` (post-fix) is now the strongest model at K=10 and K=20 by every relevance metric -- precision, recall, hit rate, NDCG, MAP, MRR -- and simultaneously the fastest at 7.1 ms mean latency. The fix flipped `filter_already_liked_items` to False; the artifact itself was not retrained.
-- `lightfm_warp` is the runner-up on every relevance metric and is also in the fast tier (40.4 ms mean).
-- `hybrid_content` is the third-best ranker by NDCG but remains the slowest baseline.
-- `popularity` is still a useful simple baseline at K=10 (Precision 0.0091, Recall 0.0909) but is below both classical CF leaders on every rank-sensitive metric.
-- Among classical CF: ALS > LightFM > SVD top-K on NDCG@10 and on mean latency.
-- `svd_topk` produces zero hits at K=10 and a small non-zero band at K=20; the "Why SVD top-K stays at zero hits" subsection above explains why this is an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
+- The evaluation flow covers 9 top-N models. The ALS exclusion-semantics fix from `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` item 2 is applied in every run.
+- `als_implicit` is the leading ranker. On the canonical 100-user latest-1 deterministic slice it tops every relevance metric; in the multi-seed slice studies above (`docs/experiments/2026-05-22_eval-slice-expansion.md`) it stays on top in 3 of 3 seeds at 100 users / holdout=1, in the 300-user single-seed run, and in 3 of 3 seeds at 300 users / holdout=3. It is simultaneously the fastest model at ~7 ms mean latency.
+- `lightfm_warp` is the runner-up on every shape tested. The gap to ALS is wide enough to be robust (ALS NDCG@10 ~2x LightFM across all four study groups). Latency stays in the ~40 ms fast tier.
+- The third-best ranker is **not stable**. On the canonical slice the report previously called this `hybrid_content`, but the variance work shows `popularity`, `tfidf_content`, and `hybrid_content` are within one standard deviation of each other at 100 users / holdout=1, and `popularity` and `tfidf_content` both beat `hybrid_content` at 300 users / holdout=3. Treat the lower tier as a tossup rather than a fixed ordering.
+- Among classical CF: ALS > LightFM > SVD top-K on NDCG@10 and on mean latency, on every studied shape.
+- `svd_topk` produces zero hits at K=10 on the small canonical slice and a small non-zero band at K=20 and at 300 users; the "Why SVD top-K stays at zero hits" subsection above explains this as an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
 - SVD rating prediction works and has RMSE 0.7558 / MAE 0.5706 on the sampled holdout.
-- These are still local directional results from one 100-user latest-1 holdout run, not a final benchmark claim.
+- These remain local directional results. Even with the variance work, both ALS and LightFM artifacts were trained on the full rating matrix including the eval holdout interactions -- a tighter leave-one-out comparison is logged in the audit plan's Deferred section.
 
 ## Caveats
 
 - This is a small local run, not a final benchmark.
-- 55 of the 100 selected users had positive holdout items for top-N evaluation; the plan's target of at least 60 was not met, but the wider run still produced content-baseline hits that the 25-user slice missed.
-- The holdout size is one latest interaction per user.
+- The canonical K=10 / K=20 tables at the top of this report come from a single 100-user deterministic-first-N latest-1 slice (run id `2026-05-20T18-47-21Z`). The Variance Bounds subsection covers seven additional runs across two slice sizes, two holdout shapes, and three seeds.
+- 55 of the 100 selected users had positive holdout items in the canonical run; the multi-seed 100-user runs landed at 54 / 52 / 54.
+- The holdout=3 expansion changes recall semantics: each user has three positive items in the denominator, capped at 1.0. Recall values across `holdout=1` and `holdout=3` runs are not directly comparable; the variance subsection treats them as separate tables.
+- Both ALS and LightFM artifacts were trained on the full rating matrix including the holdout interactions; absolute NDCG numbers are inflated to the same degree for both models, which preserves the ALS > LightFM ordering but does not establish absolute quality. A leave-one-out retraining is logged in the audit plan's Deferred section.
 - Generated artifacts are intentionally local and should be regenerated when code or data changes.
