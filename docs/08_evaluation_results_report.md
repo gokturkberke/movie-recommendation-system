@@ -9,8 +9,9 @@ This report summarizes the latest local offline evaluation run:
   --max-users 100 --k 5,10,20 \
   --include-random --include-tfidf --include-content --include-semantic \
   --include-svd --include-svd-topk \
-  --include-sbert-faiss \
-  --sbert-faiss-index-dir artifacts/indexes/sbert_faiss \
+  --include-sbert-faiss --sbert-faiss-index-dir artifacts/indexes/sbert_faiss \
+  --include-lightfm --lightfm-artifacts-dir artifacts/models/lightfm \
+  --include-als --als-artifacts-dir artifacts/models/als \
   --output-dir artifacts/evaluation
 ```
 
@@ -24,6 +25,8 @@ Run configuration:
 - Ratings rows: 33,703,215
 - Semantic baseline: TF-IDF + TruncatedSVD LSA (`--include-semantic`)
 - SBERT+FAISS baseline: `sentence-transformers/all-MiniLM-L6-v2`, 384-dim, full-catalog index under `artifacts/indexes/sbert_faiss/` (`row_count = 79,477`)
+- LightFM WARP baseline: prebuilt local artifact under `artifacts/models/lightfm/` (`row_count = 16,863,053`, `no_components = 64`, `epochs = 20`)
+- Implicit ALS baseline: prebuilt local artifact under `artifacts/models/als/` (`row_count = 16,863,053`, `factors = 64`, `iterations = 20`)
 
 Generated local artifacts:
 
@@ -58,29 +61,33 @@ The audit trail for this wider run lives in `docs/experiments/2026-05-20_classic
 
 | Model | Precision@10 | Recall@10 | HitRate@10 | NDCG@10 | MAP@10 | MRR@10 | Coverage | Diversity | Novelty | Mean latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| hybrid_content | 0.0073 | 0.0727 | 0.0727 | 0.0382 | 0.0283 | 0.0283 | 0.0019 | 0.6902 | 10.0856 | 1,466.0 ms |
-| popularity | 0.0091 | 0.0909 | 0.0909 | 0.0322 | 0.0150 | 0.0150 | 0.0005 | 0.7936 | 8.6046 | 87.9 ms |
-| sbert_faiss_content | 0.0036 | 0.0364 | 0.0364 | 0.0193 | 0.0136 | 0.0136 | 0.0039 | 0.7165 | 11.6010 | 40.7 ms |
-| semantic_content | 0.0018 | 0.0182 | 0.0182 | 0.0182 | 0.0182 | 0.0182 | 0.0045 | 0.5549 | 12.4005 | 99.1 ms |
-| tfidf_content | 0.0036 | 0.0364 | 0.0364 | 0.0139 | 0.0071 | 0.0071 | 0.0020 | 0.6826 | 10.0908 | 46.7 ms |
-| random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0069 | 0.8579 | 13.5810 | 11.7 ms |
-| svd_topk | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0029 | 0.7756 | 12.3858 | 189.6 ms |
+| lightfm_warp | 0.0255 | 0.2545 | 0.2545 | 0.1427 | 0.1100 | 0.1100 | 0.0032 | 0.7540 | 9.8075 | 43.6 ms |
+| hybrid_content | 0.0073 | 0.0727 | 0.0727 | 0.0382 | 0.0283 | 0.0283 | 0.0019 | 0.6902 | 10.0856 | 1,464.4 ms |
+| popularity | 0.0091 | 0.0909 | 0.0909 | 0.0322 | 0.0150 | 0.0150 | 0.0005 | 0.7936 | 8.6046 | 95.5 ms |
+| sbert_faiss_content | 0.0036 | 0.0364 | 0.0364 | 0.0193 | 0.0136 | 0.0136 | 0.0039 | 0.7165 | 11.6010 | 39.0 ms |
+| semantic_content | 0.0018 | 0.0182 | 0.0182 | 0.0182 | 0.0182 | 0.0182 | 0.0045 | 0.5549 | 12.4005 | 86.5 ms |
+| tfidf_content | 0.0036 | 0.0364 | 0.0364 | 0.0139 | 0.0071 | 0.0071 | 0.0020 | 0.6826 | 10.0908 | 46.3 ms |
+| als_implicit | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0041 | 0.7639 | 10.2227 | 7.8 ms |
+| random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0069 | 0.8579 | 13.5810 | 12.5 ms |
+| svd_topk | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0029 | 0.7756 | 12.3858 | 189.4 ms |
 
-At K=10, `hybrid_content` leads by NDCG, MAP, and MRR even though `popularity` has the highest precision, recall, and hit rate. `sbert_faiss_content`, `semantic_content`, and `tfidf_content` now all register hits on the wider slice, which was not true in the 25-user run.
+At K=10, `lightfm_warp` is the clear ranking leader by precision, recall, hit rate, NDCG, MAP, and MRR. It also serves in the same latency tier as SBERT+FAISS and TF-IDF content scoring, while `hybrid_content` remains far slower.
 
 ### Top-N at K=20
 
 | Model | Precision@20 | Recall@20 | HitRate@20 | NDCG@20 | MAP@20 | MRR@20 | Coverage | Diversity | Novelty |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| lightfm_warp | 0.0173 | 0.3455 | 0.3455 | 0.1657 | 0.1163 | 0.1163 | 0.0054 | 0.7672 | 10.0121 |
 | hybrid_content | 0.0064 | 0.1273 | 0.1273 | 0.0525 | 0.0324 | 0.0324 | 0.0033 | 0.7050 | 10.4092 |
 | popularity | 0.0055 | 0.1091 | 0.1091 | 0.0367 | 0.0162 | 0.0162 | 0.0008 | 0.7941 | 8.8305 |
 | tfidf_content | 0.0045 | 0.0909 | 0.0909 | 0.0280 | 0.0111 | 0.0111 | 0.0035 | 0.6833 | 10.3564 |
 | sbert_faiss_content | 0.0027 | 0.0545 | 0.0545 | 0.0236 | 0.0146 | 0.0146 | 0.0071 | 0.7395 | 11.7631 |
 | semantic_content | 0.0018 | 0.0364 | 0.0364 | 0.0230 | 0.0196 | 0.0196 | 0.0082 | 0.5573 | 12.4960 |
 | svd_topk | 0.0036 | 0.0727 | 0.0727 | 0.0178 | 0.0046 | 0.0046 | 0.0055 | 0.7849 | 12.5488 |
+| als_implicit | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0068 | 0.7597 | 10.3882 |
 | random | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0138 | 0.8484 | 13.5795 |
 
-At K=20, `hybrid_content` is still the strongest top-N model by NDCG, MAP, and MRR. `popularity` remains second on NDCG, while TF-IDF content has the next-best recall and hit rate among the non-popularity baselines.
+At K=20, `lightfm_warp` remains the strongest model by every relevance metric. `hybrid_content` is the next-best ranking model, while `als_implicit` is fast but produces no relevance hits on this slice.
 
 ### SVD Rating Prediction
 
@@ -96,29 +103,32 @@ These values measure rating prediction error, not recommendation list quality.
 
 ## Latency Findings
 
-Watch-history hybrid is no longer the latency outlier:
+Per-user latency from fastest to slowest:
 
 | Model | Mean latency | p95 latency |
 |---|---:|---:|
-| random | 11.7 ms | 12.2 ms |
-| sbert_faiss_content | 40.7 ms | 83.7 ms |
-| tfidf_content | 46.7 ms | 84.5 ms |
-| popularity | 87.9 ms | 41.6 ms |
-| semantic_content | 99.1 ms | 134.4 ms |
-| svd_topk | 189.6 ms | 192.4 ms |
-| hybrid_content | 1,466.0 ms | 4,362.4 ms |
+| als_implicit | 7.8 ms | 11.7 ms |
+| random | 12.5 ms | 13.7 ms |
+| sbert_faiss_content | 39.0 ms | 80.2 ms |
+| lightfm_warp | 43.6 ms | 47.6 ms |
+| tfidf_content | 46.3 ms | 91.7 ms |
+| semantic_content | 86.5 ms | 119.0 ms |
+| popularity | 95.5 ms | 40.5 ms |
+| svd_topk | 189.4 ms | 200.1 ms |
+| hybrid_content | 1,464.4 ms | 4,369.9 ms |
 
-`hybrid_content` stays under the 2,000 ms mean-latency gate on the wider 100-user run, but remains the slowest baseline. SBERT+FAISS is still the fastest semantic-aware option at 40.7 ms mean, close to the pure TF-IDF content path and materially faster than semantic-LSA.
+`als_implicit` is the fastest model in this run, followed by random sampling. `lightfm_warp` lands in the fast semantic/content tier at 43.6 ms mean while also leading the relevance tables. `hybrid_content` stays under the 2,000 ms mean-latency gate, but remains the slowest baseline.
 
 ## Conclusions
 
-- The evaluation flow now covers every pre-classical-CF baseline on a 100-user slice, including the real SBERT+FAISS full-catalog index (79,477 movies, 384-dim).
-- `hybrid_content` is the strongest top-N model by NDCG at K=10 and K=20, and it remains under the 2,000 ms mean latency gate.
-- `popularity` remains a strong simple baseline; it leads precision, recall, and hit rate at K=10, but trails hybrid on rank-sensitive metrics.
-- `sbert_faiss_content`, `tfidf_content`, and `semantic_content` now all produce relevance hits on the wider run, giving LightFM and ALS a more meaningful reference point than the 25-user report.
-- `svd_topk` still does not beat hybrid or popularity in top-N ranking on this slice.
+- The evaluation flow now covers 9 top-N models on the same 100-user slice, including LightFM WARP and Implicit ALS.
+- `lightfm_warp` is the strongest model at K=10 and K=20 by precision, recall, hit rate, NDCG, MAP, and MRR.
+- `hybrid_content` is now the second-best model by NDCG at K=10 and K=20, but it is far slower than LightFM.
+- `popularity` remains a useful simple baseline, but it no longer leads any rank-sensitive table after LightFM is added.
+- `als_implicit` is the fastest model at 7.8 ms mean latency, but it produces no relevance hits in this run.
+- Among the classical CF models, LightFM WARP beats both Surprise SVD top-K and Implicit ALS on NDCG@10 and mean latency; ALS beats SVD on latency but not relevance.
 - SVD rating prediction works and has RMSE 0.7558 / MAE 0.5706 on the sampled holdout.
-- The next step is to add LightFM and Implicit ALS, then regenerate the final 9-model report on this same 100-user protocol.
+- These are still local directional results from one 100-user latest-1 holdout run, not a final benchmark claim.
 
 ## Caveats
 
