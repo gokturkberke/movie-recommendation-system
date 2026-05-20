@@ -44,7 +44,22 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Conclusions ("`
   - The ALS top-20 with `filter_already_liked_items=False` (then post-filtered by train watched ids) contains the holdout for at least 1 of the 5 users.
   - The SVD holdout rank in the full-catalog sort is greater than 50 for at least 4 of the 5 sampled users -- consistent with an algorithmic weakness, not a wiring filter.
 - **Expected outcome:** Two cleanly proven hypotheses. Decision criterion: ALS shows the smoking-gun (holdout in user_items row) for at least 4 of 5 users; SVD shows a high holdout rank for at least 4 of 5 users.
-- **DONE / DROPPED:**
+- **DONE (commit `6df6a24`):** Added `scripts/diagnose_als_svd_topk.py` and ran it against the same 100-user / latest-1 / positive-threshold=4.0 slice the canonical evaluation uses. All four pre-stated verification criteria passed; both working hypotheses are confirmed.
+  - Diagnostic summary across 5 sampled positive-holdout users (`random_seed=42`, sampled userIds=[5, 47, 68, 85, 108]):
+
+    | Check | Result | Threshold |
+    |---|---:|---:|
+    | holdout in ALS `item_index` | 5 / 5 | >= 4 |
+    | holdout in LightFM `item_index` (cross-check) | 5 / 5 | -- |
+    | holdout in `user_items[user_position]` row (smoking gun for ALS) | 5 / 5 | >= 4 |
+    | ALS top-20 with `filter_already_liked_items=True` contains holdout | 0 / 5 | == 0 |
+    | ALS top-20 with `filter_already_liked_items=False` (post-filter train) contains holdout | 3 / 5 | >= 1 |
+    | SVD full-catalog rank of holdout > 50 | 4 / 5 | >= 4 |
+
+  - Per-user confidence values match the formula `1 + 40 * max(rating - 4.0, 0)`: userId 5 (rating 5.0) -> 41.0; userId 47 (rating 5.0) -> 41.0; userId 68 (rating 4.5) -> 21.0; userId 85 (rating 4.0) -> 1.0; userId 108 (rating 4.5) -> 21.0. The edge case at userId 85 (rating exactly equals threshold) leaves confidence=1.0, which weakens but does not zero the ALS signal.
+  - SVD full-catalog ranks of the holdout for the same 5 users: 94, 20, 392, 14171, 10934. Consistent with the algorithmic-weakness hypothesis: RMSE-trained Surprise SVD concentrates on a narrow predicted-score-near-5.0 set, so user-specific holdout movies land outside the top 20 for 4 of 5 users in this sample.
+  - Local dump path (not committed): `/private/tmp/diagnose_als_svd_topk_dump.txt`. Reproducible via `.venv/bin/python scripts/diagnose_als_svd_topk.py --sample-size 5 --random-seed 42 --output-path /private/tmp/diagnose_als_svd_topk_dump.txt`.
+  - Decision: proceed to Item 2. The ALS fix is unambiguous (flip `filter_already_liked_items` to `False` and rely on the post-hoc train-only `filter_watched_movies`); the SVD top-K finding is now well-supported for Item 4's documentation.
 
 ## 2) ALS wiring fix (flip `filter_already_liked_items`)
 
