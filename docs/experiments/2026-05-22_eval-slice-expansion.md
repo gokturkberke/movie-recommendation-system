@@ -112,7 +112,7 @@
   - `data.evaluated_user_count` reaches at least 150 (~ 55% of 300 expected based on the 100-user rate).
   - DONE marker captures evaluated_user_count and the same per-model K=10 metrics as item 2.
 - **Expected outcome:** A reference point that separates "more users" from "more holdout". Decision criterion: ordering of als > lightfm > hybrid on NDCG@10 holds, or the deviation is documented.
-- **DONE (commit to be filled below):** Ran the canonical 9-model evaluation at `--max-users 300 --user-sample-seed 42 --holdout-count 1`. Evaluated user count landed at 177 of 300 selected (~59% positive-holdout rate, in line with the 55% rate at 100 users). H2 confirmed: ALS > LightFM > hybrid ordering holds, and ALS leads by an even wider margin.
+- **DONE (commit `af00602`):** Ran the canonical 9-model evaluation at `--max-users 300 --user-sample-seed 42 --holdout-count 1`. Evaluated user count landed at 177 of 300 selected (~59% positive-holdout rate, in line with the 55% rate at 100 users). H2 confirmed: ALS > LightFM > hybrid ordering holds, and ALS leads by an even wider margin.
   - K=10 metrics:
 
     | Model | NDCG@10 | HitRate@10 | Precision@10 | Recall@10 | Latency mean |
