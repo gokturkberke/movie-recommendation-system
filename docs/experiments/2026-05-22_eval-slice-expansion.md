@@ -203,7 +203,12 @@
   - No code is touched in this item.
   - `.venv/bin/python -m unittest discover -s tests` still green (unaffected -- doc-only).
 - **Expected outcome:** A defensible variance picture readable in 60 seconds. Decision criterion: the three tables agree with the seven run JSONs row-by-row.
-- **DONE / DROPPED:**
+- **DONE (commit `d3f74ea`):** Added the "Variance Bounds (multi-seed slice studies)" subsection to `docs/08_evaluation_results_report.md` with three tables (mean +/- std for NDCG@10, HitRate@10, and mean latency across the top-5 ranking models) plus three short interpretation paragraphs. Reworded Conclusions to acknowledge variance (ALS > LightFM is robust on every studied shape; the third spot is unstable). Reworded Caveats with the canonical-slice provenance, the holdout=3 recall semantics correction, and the shared-leakage note. Test suite stays 60/60 (doc-only change).
+  - Coverage summary (NDCG@10):
+    - Table A (100u / h=1 / 3 seeds): ALS 0.1907 +/- 0.0232, LightFM 0.0753 +/- 0.0173, hybrid 0.0225 +/- 0.0101.
+    - Table B (300u / h=1 / single seed): ALS 0.2196, LightFM 0.1173, popularity 0.0467, hybrid 0.0383.
+    - Table C (300u / h=3 / 3 seeds): ALS 0.2409 +/- 0.0299, LightFM 0.1237 +/- 0.0188, popularity 0.0416 +/- 0.0065, tfidf 0.0317 +/- 0.0079, hybrid 0.0325 +/- 0.0082.
+  - Decision: shipped. All four items of this plan are now DONE. Deferred follow-ons remain in the section below for future plans.
 
 ## Deferred / Future (out of this plan)
 
