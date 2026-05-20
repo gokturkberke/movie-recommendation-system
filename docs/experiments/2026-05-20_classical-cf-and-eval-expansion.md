@@ -227,7 +227,24 @@
   - Tests still pass: `.venv/bin/python -m unittest discover -s tests`.
   - Streamlit smoke (optional but cheap): `.venv/bin/python -m streamlit run src/app.py --server.headless true --server.port 8765 --browser.gatherUsageStats false` — confirm the Content-Based page still renders with both TF-IDF and SBERT modes (no Streamlit UI surface changed in this plan; this is a regression check only).
 - **Expected outcome:** A single canonical report that ranks 9 models on the same 100-user slice. Decision criterion: report and CSV agree row-by-row, and the classical-CF conclusion paragraph is grounded in the new numbers.
-- **DONE / DROPPED:** (filled in after commit; include the full 9-row K=10 summary table: model, precision_at_k, recall_at_k, ndcg_at_k, latency_mean_ms)
+- **DONE (commit `3f0ab0e`):** Re-ran the canonical 100-user evaluation with all 9 top-N models plus SVD rating prediction, then refreshed `docs/08_evaluation_results_report.md` with LightFM and ALS included in the command, run configuration, K=10/K=20 tables, latency findings, conclusions, and caveats.
+  - Metric / result (K=10):
+    | Model | Precision@10 | Recall@10 | NDCG@10 | Latency mean |
+    |---|---:|---:|---:|---:|
+    | lightfm_warp | 0.0255 | 0.2545 | 0.1427 | 43.6 ms |
+    | hybrid_content | 0.0073 | 0.0727 | 0.0382 | 1,464.4 ms |
+    | popularity | 0.0091 | 0.0909 | 0.0322 | 95.5 ms |
+    | sbert_faiss_content | 0.0036 | 0.0364 | 0.0193 | 39.0 ms |
+    | semantic_content | 0.0018 | 0.0182 | 0.0182 | 86.5 ms |
+    | tfidf_content | 0.0036 | 0.0364 | 0.0139 | 46.3 ms |
+    | als_implicit | 0.0000 | 0.0000 | 0.0000 | 7.8 ms |
+    | random | 0.0000 | 0.0000 | 0.0000 | 12.5 ms |
+    | svd_topk | 0.0000 | 0.0000 | 0.0000 | 189.4 ms |
+  - Run id: `artifacts/evaluation/metrics_summary_2026-05-20T09-47-43Z.{csv,json}`; `run_config.json` confirms `include_lightfm = true`, `include_als = true`, `include_sbert_faiss = true`, and `max_users = 100`.
+  - Verification: `metrics_summary.csv` has 29 lines: 1 header + 27 top-N rows + 1 SVD rating-prediction row. This exposes another off-by-one in the authored plan text, which said 28 lines while also describing 1 + 9 x 3 + 1 rows.
+  - Error check: no `lightfm_error`, `als_error`, or `sbert_faiss_error` fields were present in the final JSON.
+  - Tests: `.venv/bin/python -m unittest discover -s tests` 56/56 OK.
+  - Decision: shipped. LightFM WARP is the strongest model on this slice; ALS is the fastest but produced no relevance hits.
 
 ## Deferred / Future (out of this plan)
 
