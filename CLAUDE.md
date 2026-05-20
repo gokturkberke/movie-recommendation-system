@@ -41,3 +41,47 @@ Repository-specific debugging rules: - Reproduce issues with tests, scripts, log
 6. Coding Standards
 Non-negotiable rules: - No emojis ever in code, logs, commits, or generated documentation. - Never use Turkish characters in variables, functions, or comments. - Avoid over-defensive programming. Do not add unnecessary try/except blocks, wrappers, or fallback branches without evidence. - Keep communication and README-style documentation short, direct, and human-readable. - Do not generate AI slop.
 Repo-safe engineering standards: - Preserve the existing module boundaries between src/, scripts/, tests/, and config/. - Do not silently rename model files, artifact files, registry names, endpoint paths, schema fields, or config keys. - Do not introduce broad refactors during feature work or bug work unless explicitly requested. - Prefer explicit, testable logic over abstraction-heavy wrappers and fallback-heavy control flow. - Keep Streamlit UI thin; keep recommendation behavior in src/recommenders.py and data loading in src/data_access.py. - If you discover drift or contradictions, document them clearly in the task output instead of masking them.
+
+7. Experiment Planning And Execution Log
++ This section defines how every experiment / improvement plan in this project is documented and how its execution is marked. Goal: every plan and its outcome live in one place (`docs/experiments/`) in a commit-traceable way, so future references to an experiment are `grep`-able.
++ Where the plan file goes, and what it is named:
++ All new plans are saved under `docs/experiments/`.
++ Filename format: `{YYYY-MM-DD}_{plan-name}.md` (kebab-case plan name). Example: `2026-05-14_recency-weighting-sweep.md`, `2026-05-20_pri-transform-revisit.md`.
++ The date is the day the plan was **authored**, not the day it was executed. The filename stays fixed even if the plan spans multiple experiments over several days.
++ Do not touch code before the plan file exists. In the `Inspect -> Plan -> Code -> Test -> Fix` loop, the plan file is the artifact produced by the `Plan` step.
++ Required structure of the plan file:
++ A plan file is written **item by item**, **in logical order**, as a **narrative**: motivation -> hypothesis -> preconditions -> items -> expected outputs -> decision criteria.
++ Header block at the top of every plan file:
++   - **Date:** {YYYY-MM-DD}
++   - **Topic:** short title
++   - **Motivation:** which report section (`§X`) or which metric anomaly triggered this plan; link the baseline run id(s) so comparisons stay reproducible.
++   - **Hypothesis:** the proposition under test, expressed as a measurable claim (e.g. "`asinh` transform improves PRI Q90 coverage by at least 1pp").
++   - **Preconditions:** code / config / cache state that must already be in place before the plan starts.
++ Then a numbered list of items (`## 1) ...`, `## 2) ...`). Template for each item:
++   - **Goal:** what will change (code / config / sweep parameter).
++   - **Files:** paths to touch (with current line numbers or function names where useful).
++   - **Steps:** sub-bullets, one logical operation per bullet (e.g. "add `data.train_outlier_sigma.BidderTotalBids: 3.0` to config", "run the sweep runner with a single trial and capture the log").
++   - **Test / verification:** which unit test gets added or updated; which full-training output is compared against which metric table.
++   - **Expected outcome:** decision criterion (e.g. how big a Q50 MAE delta counts as meaningful, where coverage should land relative to the target band).
++   - **DONE / DROPPED:** empty at authoring time; filled in during execution (see below).
++ Items are ordered by the **narrative**: dependencies before dependents, independents in parallel. The flow "test the hypothesis with a single trial -> if positive, expand to a sweep -> production decision" must always be visible — random ordering is not acceptable.
++ Execution / marking contract:
++ Each time an item is executed, write the outcome **into the same file**, **immediately under that item**. Template:
++   ```
++   **DONE (commit `<hash>`):** {one or two sentences: what changed, which behavior was gained, any remaining side-effect.}
++   - Metric / result: {small baseline-vs-experiment table if relevant}
++   - Run id: {always include — found under `models/training/{target}/{run_id}/`}
++   - Sweep JSON: {if applicable, path under `docs/experiments/...sweep_...json`}
++   - Decision: {shipped to production, shelved, or fed into another experiment}
++   ```
++ The `<hash>` placeholder must never be left in place; do not write DONE before the commit lands. If the execution required multiple commits, list all of them in order, comma-separated.
++ For abandonment, the marker becomes `DROPPED ({date}):` followed by a one-paragraph reason. No item is left open; every item is closed as either DONE or DROPPED.
++ Outside the plan file, the audit report (`docs/experiments/10_05_2026_fully_report.md`) keeps cross-references across multiple plans. If a new plan resolves a specific audit item (e.g. §3.5 sample weighting), the plan file carries a `Corresponding audit item: §3.5` line, and the audit item is annotated with `see: docs/experiments/2026-05-14_recency-weighting-sweep.md`.
++ Any change landing in production config (`config/quantile_model_config.yaml`) as the outcome of a plan / experiment must carry an inline comment that points back to the plan file or report `§` (e.g. `# experiment 4 (report §14): DMBC sigma=4.0`). This is how a config reader finds the rationale behind a value.
++ A plan file does NOT contain:
++ Speculative "might also try" lists above and beyond the concrete intent. A plan is the contract for **work happening now**, not a wishlist.
++ Re-summaries of already-closed plans. A cross-reference link is enough.
++ Pasted code blocks. A plan file is prose + bullets; code changes live in the commit.
++ Pre-flight (before creating a new plan file):
++ `grep` under `docs/experiments/` for a half-open plan on the same topic. If one exists, append a new item to that plan file — do not create a new one.
++ Record the current benchmark / baseline run id before the plan starts (write it in the **Motivation** section). This is what later makes statements like "experiment X is +0.4 Q50 MAE vs baseline" reproducible.
