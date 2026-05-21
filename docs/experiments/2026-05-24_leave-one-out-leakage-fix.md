@@ -50,7 +50,11 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Caveats block (
   - CLI smoke produces a metadata file with `excluded_pair_count` reflecting the excluded CSV row count (lower-bounded by 0 because some excluded pairs may have been below the rating threshold anyway).
   - Backward compat: omitting `--exclude-holdout-pairs` reproduces the prior artifact byte-for-byte modulo timestamp (i.e., `row_count`, `user_count`, `item_count` match the committed `artifacts/models/{lightfm,als}/metadata.json`).
 - **Expected outcome:** Both training paths can leakage-correct via a single CSV. Decision criterion: tests pass; backward compat holds.
-- **DONE / DROPPED:**
+- **DONE (commit `0aad222`):** Extended `build_interaction_matrix` (LightFM) and `build_confidence_matrix` (ALS) with optional `exclude_pairs` keyword that drops the matching `(userId, movieId)` rows via `pd.MultiIndex.isin`. Added `--exclude-holdout-pairs <CSV>` to both train scripts; CSV is read once, converted to a set of integer tuples, and threaded through. Metadata gains `excluded_pair_count` and `exclude_pairs_path` only when the flag is provided -- backward compatible.
+  - Tests: 4 new unit tests (2 per builder) pass. Full suite 68/68 OK (was 64/64).
+  - CLI smoke: trained ALS with a 2-row exclusion CSV. Leaked baseline `row_count = 16,863,053`; LOO smoke `row_count = 16,863,051` -- exact delta of 2 matching the excluded count. `metadata.json` carries `excluded_pair_count = 2` and `exclude_pairs_path` pointing at the input CSV.
+  - Backward compat: omitting the flag returns the prior code path; the existing tests on `build_interaction_matrix` and `build_confidence_matrix` that do not pass `exclude_pairs` still pass byte-for-byte.
+  - Decision: proceed to Item 2 (extract union holdouts + retrain LOO artifacts).
 
 ## 2) Extract union holdout set + retrain LOO artifacts
 
