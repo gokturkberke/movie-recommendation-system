@@ -135,7 +135,7 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Caveats block (
   - Per-seed `als_implicit.10.evaluated_user_count` equals the 2026-05-23 reference's (same eval slice, same user split).
   - DONE marker records the per-seed K=10 NDCG@10 for `als_implicit` and `lightfm_warp` aggregate and per-segment.
 - **Expected outcome:** A 3-seed LOO dataset ready for the synthesis. Decision criterion: three artifacts exist; non-CF baselines unchanged.
-- **DONE (commit to be backfilled):** Ran the 9-model segmented eval three times against the LOO artifacts at `--max-users 300 --holdout-count 3 --segment-by-history --user-sample-seed` in `42, 7, 1337`. Total wall time ~38 minutes.
+- **DONE (commit `fc29c53`):** Ran the 9-model segmented eval three times against the LOO artifacts at `--max-users 300 --holdout-count 3 --segment-by-history --user-sample-seed` in `42, 7, 1337`. Total wall time ~38 minutes.
   - Sanity check passed cleanly: every deterministic non-CF baseline (popularity, tfidf_content, hybrid_content, sbert_faiss_content, semantic_content, svd_topk, random) produces NDCG@10 values that are **byte-for-byte identical** to the 2026-05-23 leaked-baseline runs at the same seed. Only `als_implicit` and `lightfm_warp` shifted, which is exactly the expected behavior of swapping in LOO artifacts.
   - **Aggregate NDCG@10 collapse:**
 
