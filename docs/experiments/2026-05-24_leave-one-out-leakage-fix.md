@@ -206,7 +206,12 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Caveats block (
   - Caveats no longer treats leakage as "open" -- it cross-references the new subsection.
   - Full test suite stays >=68 (doc-only change).
 - **Expected outcome:** A defensible leakage-corrected picture. Decision criterion: the two tables agree with the six JSONs row-by-row; the universal-leader claim is either preserved with new evidence or honestly qualified.
-- **DONE / DROPPED:**
+- **DONE (commit `b9b4fdf`):** Added the "Leakage-corrected (leave-one-out) re-evaluation" subsection to `docs/08_evaluation_results_report.md` between "Cold-start segmentation" and "Conclusions" with the aggregate K=10 table, per-segment table, and the two interpretation paragraphs. Conclusions block reworded: the previous "ALS leads on every studied shape and every user-history segment" line is replaced with a leakage-aware framing -- ALS leads in the leaked-artifact regime but not in LOO; under LOO the leaderboard is segment-dependent (ALS owns cold, LightFM owns heavy, middle two are mixed within seed variance). Caveats updated: leakage moves from "open" to "measured" with explicit pointer to the LOO subsection.
+  - Universal-leader claim explicitly qualified: aggregate ALS LOO 0.0717 +/- 0.0132 vs LightFM 0.0678 +/- 0.0180 -- within one standard deviation; at seed 42 LightFM slightly beats ALS.
+  - Segmented leaderboard under LOO: ALS cold (3/3 seeds); warm mixed (LightFM 2/3, ALS 1/3); regular mixed (ALS 2/3, LightFM 1/3); heavy LightFM (3/3 seeds with 0.052 vs 0.034 margin).
+  - Cold > heavy inversion attenuates for ALS (ratio 6.96x -> 3.76x) and nearly resolves for LightFM (7.46x -> 1.62x).
+  - Tests stay 68/68 (doc-only change).
+  - Decision: shipped. All four items of this plan are DONE. The forward-looking quality claim now rests on the LOO numbers, not the leaked ones.
 
 ## Deferred / Future (out of this plan)
 
