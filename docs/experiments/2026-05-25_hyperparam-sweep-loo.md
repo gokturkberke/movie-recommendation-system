@@ -57,7 +57,10 @@ Corresponding audit item: 2026-05-24 plan's open question ("are the LOO heavy an
   - 2-combo smoke produces 2 artifact dirs + manifest; second run skips.
   - Idempotency: `metadata.json` timestamps unchanged across reruns.
 - **Expected outcome:** A reusable sweep driver. Decision criterion: tests pass; smoke produces expected manifest shape.
-- **DONE / DROPPED:**
+- **DONE (commit `35690f1`):** Added `scripts/sweep_classical_cf.py` (~155 lines) and `tests/test_sweep_classical_cf.py`. Driver supports `--grid` (repeatable, comma-separated) and `--fixed` (repeatable, single value) axes; expands the cartesian product; calls the existing train scripts via `subprocess.run` with `--exclude-holdout-pairs` forwarded. Slug encoding is stable: `lightfm_n128_lwarp_e20`, `als_f64_r0.01_a40.0_i20`. Idempotency: existing `metadata.json` -> skip + manifest row with `skipped=true`.
+  - Tests: 5 new (slug for LightFM, slug for ALS, grid+fixed merge, duplicate-axis raise, manifest skip). All pass. Full suite 73/73 OK (was 68/68).
+  - CLI sanity: `scripts/sweep_classical_cf.py --help` resolves; required flags enforced (`--model`, `--exclude-holdout-pairs`, `--output-root`, `--manifest-path`).
+  - Decision: proceed to Item 2 (12-artifact sweep run).
 
 ## 2) Execute the sweep (12 artifacts)
 
