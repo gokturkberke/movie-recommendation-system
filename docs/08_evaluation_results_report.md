@@ -2,6 +2,8 @@
 
 ## Run Summary
 
+**Status (2026-05-21):** The headline numbers in the Run Summary and Model Comparison sections below come from the initial 100-user single-run and are now **superseded** by the leakage-corrected leave-one-out + hyperparameter-sweep subsections later in this document. Current strongest classical-CF baseline: tuned ALS `factors=64, regularization=0.1` (aggregate NDCG@10 = 0.0787 +/- 0.0115 over 3 seeds). See `docs/experiments/2026-05-24_leave-one-out-leakage-fix.md` and `docs/experiments/2026-05-25_hyperparam-sweep-loo.md` for the audit trail.
+
 This report summarizes the latest local offline evaluation run:
 
 ```bash

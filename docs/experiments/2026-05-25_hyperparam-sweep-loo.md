@@ -1,4 +1,5 @@
 - **Date:** 2026-05-25
+- **Note:** Filename and Date field reflect narrative ordering of the experiment arc; all DONE commits landed on 2026-05-21. CLAUDE.md section 7 strict reading is "filename = authoring date" -- this drift is intentional and recorded here rather than rewritten, so commit hashes and cross-references in other docs stay valid.
 - **Topic:** Hyperparameter sweep for LightFM and ALS on LOO artifacts -- close the "is the single-point tuning near Pareto?" question
 - **Motivation:** The 2026-05-24 LOO eval landed at LightFM heavy = 0.0524 +/- 0.0020 and ALS cold = 0.1272 +/- 0.0569 with `no_components=64, loss=warp, epochs=20` for LightFM and `factors=64, regularization=0.01, alpha=40, iterations=20` for ALS. Both are single points in a multi-dimensional hyperparameter space. Without a sweep, we cannot tell whether the post-LOO segment-dependent ordering (ALS cold, LightFM heavy, mixed middle) is a real model-class signature or an artifact of the single-point tuning. The 2026-05-22 plan logged this sweep as the natural follow-on once LOO baselines settled.
 - **Hypothesis:**

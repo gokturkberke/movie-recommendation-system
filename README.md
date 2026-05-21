@@ -23,6 +23,12 @@ This project is a comprehensive movie recommendation system that suggests person
 * **TMDB API Integration:**
     * Dynamically fetches movie posters and summaries to provide a rich visual experience. (Requires a TMDB API Key)
 
+## Status (2026-05-21)
+
+* Product app ships TF-IDF hybrid content recommendations + Surprise SVD collaborative filtering + optional SBERT semantic mode.
+* Offline-best classical-CF baseline under leakage-corrected leave-one-out: tuned ALS `factors=64, regularization=0.1` (aggregate NDCG@10 = 0.0787 +/- 0.0115 over 3 seeds, 3/3 seed wins). Full numbers in `docs/08_evaluation_results_report.md`.
+* LightFM and Implicit ALS live in the offline-eval hat only; the Streamlit UI does not call them by design (intentional scope control). Promoting either into the product app is a separate, flagged piece of work -- see Future work below.
+
 ## Implemented vs. Experimental
 
 Implemented in the Streamlit app:
@@ -48,8 +54,11 @@ Implemented for offline evaluation only:
 
 Future work:
 
-* Graph / sequence models.
-* Larger, repeated evaluation runs before claiming model quality improvements.
+* Surface explainability in the Streamlit UI (a "why this was recommended" panel on the result cards).
+* Optional product integration of tuned ALS / LightFM behind a feature flag (today they are offline-eval only).
+* Modern sequence / graph recommenders (LightGCN, SASRec, BERT4Rec) on the offline-eval hat.
+* One-click artifact reproducibility -- LightFM and ALS artifacts are gitignored; expose a single scripted recipe to rebuild them on a fresh checkout.
+* LightFM `random_state` seeding to remove the ~0.0145 training-noise floor that currently caps direct LightFM-vs-ALS heavy-segment comparability.
 
 ## 🛠️ Technologies and Libraries Used
 
@@ -183,7 +192,7 @@ Then evaluate the prebuilt artifact:
   --als-artifacts-dir artifacts/models/als
 ```
 
-Current local findings are summarized in `docs/08_evaluation_results_report.md`. In short: on the latest 100-user run, LightFM WARP leads every ranking metric at K=10 and K=20 (NDCG@10 = 0.1427) while staying in the fast tier at ~44 ms mean latency; hybrid content is the runner-up on NDCG but the slowest baseline at ~1.5 s mean latency; SBERT+FAISS, TF-IDF, semantic-LSA, and popularity sit below the two leaders on ranking; Implicit ALS and SVD top-K produced no relevance hits on this slice and need follow-up investigation before they can be compared on quality. Treat these as local directional results, not final benchmark claims.
+Current local findings are summarized in `docs/08_evaluation_results_report.md`. The latest leakage-corrected leave-one-out + hyperparameter sweep places tuned ALS (`factors=64, regularization=0.1`) as the strongest classical-CF baseline by aggregate NDCG@10 = 0.0787 +/- 0.0115 over 3 seeds (3/3 seed wins), with the largest gain on the cold segment (0.1335). LightFM WARP remains slightly ahead on the heavy segment but the gap is inside seed variance, and LightFM lacks `random_state` so its ~0.0145 training-noise floor caps direct comparability. The earlier 100-user single-run headline (LightFM lead across all metrics, ALS / SVD top-K zero relevance hits) is now known to have been a leakage + single-point artifact and is superseded by the LOO + sweep subsections of the report. Treat these as local directional results, not final benchmark claims.
 
 ## 📖 Usage
 
