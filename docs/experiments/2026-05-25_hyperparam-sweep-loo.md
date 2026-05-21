@@ -103,7 +103,7 @@ Corresponding audit item: 2026-05-24 plan's open question ("are the LOO heavy an
   - Spot-check three random combos: `cat artifacts/sweeps/{slug}/metadata.json | jq` shows the matching hyperparameters and `excluded_pair_count=1555`.
   - DONE marker records wall time per combo (median, total) and the manifest path.
 - **Expected outcome:** 12 leakage-corrected artifacts ready for sweep eval. Decision criterion: manifest row count and metadata correctness pass.
-- **DONE (commit pending; this is doc-only):** Ran the LightFM and ALS sweeps back-to-back via the driver. 12 artifacts produced; `artifacts/sweeps/sweep_manifest.csv` has 13 lines (1 header + 12 rows). Every artifact's `metadata.json` carries `excluded_pair_count=1555` and `row_count=16,861,498` -- proving the LOO exclusion was applied uniformly.
+- **DONE (commit `ecdfe10`):** Ran the LightFM and ALS sweeps back-to-back via the driver. 12 artifacts produced; `artifacts/sweeps/sweep_manifest.csv` has 13 lines (1 header + 12 rows). Every artifact's `metadata.json` carries `excluded_pair_count=1555` and `row_count=16,861,498` -- proving the LOO exclusion was applied uniformly.
   - Total wall time ~96 minutes (longer than the 50-60 min estimate; BPR loss made LightFM training meaningfully slower than WARP):
 
     | Artifact | Train seconds | Notes |
