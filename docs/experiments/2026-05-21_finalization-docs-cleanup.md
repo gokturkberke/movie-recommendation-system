@@ -24,7 +24,9 @@
   - `grep -n "tuned ALS" README.md` returns at least one match in the new paragraph.
   - `grep -n "superseded" README.md` returns at least one match in the new paragraph.
 - **Expected outcome:** A reader pointed at `README.md` from the repo root learns the current strongest offline classical-CF baseline, its hyperparameters, and that the older headline has been retired -- without needing to open the experiment plans.
-- **DONE / DROPPED:**
+- **DONE (commit `86383a1`):** Replaced the `README.md:186` paragraph in place. Stale `LightFM WARP leads every ranking metric at K=10 and K=20 (NDCG@10 = 0.1427)` sentence is gone; new paragraph names tuned ALS aggregate (0.0787 +/- 0.0115, 3/3 seed wins, cold 0.1335) and explicitly retires the 100-user single-run headline as superseded.
+  - Verification: `grep "LightFM WARP leads every ranking metric" README.md` returns empty; `grep "tuned ALS" README.md` returns 3 matches (Status block, Future work, Current local findings paragraph); `grep "superseded" README.md` matches in the Current local findings paragraph.
+  - Decision: shipped to production README.
 
 ## 2) Add a top-of-README status block
 
@@ -37,7 +39,9 @@
     - LightFM and ALS live in the offline-eval hat only; the Streamlit UI does not call them by design (intentional scope control).
 - **Test / verification:** `grep -n "Status (2026-05-21)" README.md` returns one match.
 - **Expected outcome:** The "what is this repo running right now" question has a one-glance answer near the top of README.
-- **DONE / DROPPED:**
+- **DONE (commit `86383a1`):** Inserted `## Status (2026-05-21)` block directly above `## Core Features` (README.md:26). Three bullets: product app stack, offline-best classical-CF baseline (tuned ALS f64 r0.1 with the numeric NDCG@10), and the explicit "LightFM and ALS are offline-eval only -- the Streamlit UI does not call them by design" scope-control statement.
+  - Verification: `grep "Status (2026-05-21)" README.md` returns one match at line 26.
+  - Decision: shipped to production README.
 
 ## 3) Slim README Future work list
 
@@ -52,7 +56,9 @@
     - LightFM `random_state` seeding to remove the ~0.0145 training-noise floor for benchmark stability.
 - **Test / verification:** `grep -n "random_state" README.md` returns at least one match. `grep -n "LightGCN" README.md` returns at least one match.
 - **Expected outcome:** The Future work list now reflects the genuine close-out items; the implementation of any of these would be a separate plan.
-- **DONE / DROPPED:**
+- **DONE (commit `86383a1`):** Replaced the two-bullet stub at `README.md:55` (post-shift due to the inserted Status block) with the five close-out bullets: UI explainability, ALS/LightFM product integration behind a flag, modern sequence/graph recommenders, one-click artifact reproducibility, and LightFM `random_state` seeding.
+  - Verification: `grep "random_state" README.md` matches in the Future work list (line 61) and again in the Current local findings paragraph; `grep "LightGCN" README.md` matches the modern-recommenders bullet (line 59).
+  - Decision: shipped to production README; each bullet is a candidate for a follow-up plan in its own right.
 
 ## 4) Annotate the four future-dated plan files
 
@@ -68,7 +74,9 @@
   - No other body change; do not rename files, do not adjust the `Date:` field, do not touch commit hashes.
 - **Test / verification:** `grep -n "narrative ordering" docs/experiments/2026-05-2[2345]_*.md` returns one match per file (four matches total).
 - **Expected outcome:** Audit trail integrity preserved (filename ordering + commit hashes intact) and the drift is explicitly documented at the source file rather than buried in a separate notes doc.
-- **DONE / DROPPED:**
+- **DONE (commit `86383a1`):** Inserted the identical `Note:` line on line 2 of each of the four files, directly under the `Date:` header. Filenames, `Date:` fields, and DONE commit hashes elsewhere in those files are untouched.
+  - Verification: `grep "narrative ordering" docs/experiments/2026-05-2[2345]_*.md` returns one match per file (four matches total).
+  - Decision: shipped; the drift is now explicit at the source file rather than relying on a separate notes doc.
 
 ## 5) Stale-banner on the evaluation report
 
@@ -78,7 +86,9 @@
   - Insert one paragraph. Contents: a `Status (2026-05-21):` lead-in, naming the tuned-ALS aggregate result (NDCG@10 = 0.0787 +/- 0.0115), pointing readers to `docs/experiments/2026-05-24_leave-one-out-leakage-fix.md` and `docs/experiments/2026-05-25_hyperparam-sweep-loo.md` for the audit trail. No body rewrite below.
 - **Test / verification:** `grep -n "Status (2026-05-21)" docs/08_evaluation_results_report.md` returns one match.
 - **Expected outcome:** A reader entering the eval report sees the supersession banner before reaching the original 100-user run-summary block.
-- **DONE / DROPPED:**
+- **DONE (commit `86383a1`):** Inserted the `Status (2026-05-21):` banner paragraph at `docs/08_evaluation_results_report.md:5`, between `## Run Summary` and the existing body paragraph. The body of the report (Run configuration, Model Comparison, latency tables) is untouched.
+  - Verification: `grep "Status (2026-05-21)" docs/08_evaluation_results_report.md` returns one match at line 5.
+  - Decision: shipped; body rewrite explicitly out of scope per the plan's `Out of scope` section.
 
 ## Verification (whole cleanup, post-commit)
 
