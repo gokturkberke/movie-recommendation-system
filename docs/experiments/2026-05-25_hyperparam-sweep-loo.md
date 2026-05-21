@@ -200,7 +200,22 @@ Corresponding audit item: 2026-05-24 plan's open question ("are the LOO heavy an
   - Conclusions reflects the sweep findings (does ALS still own cold? LightFM still own heavy?).
   - Full test suite stays at 70.
 - **Expected outcome:** A defensible Pareto picture for both classical CF models. Decision criterion: sweep table agrees with `sweep_results.csv` row-for-row; winners' multi-seed numbers agree with the new eval JSONs.
-- **DONE / DROPPED:**
+- **DONE (commit `e4dc94d`):** Added the "Hyperparameter sweep on LOO artifacts" subsection to `docs/08_evaluation_results_report.md` between "Leakage-corrected (leave-one-out) re-evaluation" and "Conclusions" with three tables (full 12-artifact sweep, winners vs single-point, per-seed heavy leaderboard) plus interpretation paragraphs. Conclusions updated to reflect tuned-ALS aggregate leadership and narrowed-but-not-flipped LightFM heavy lead. Caveats added a LightFM training-noise note (~0.0145 vs ALS ~0.003).
+  - Run ids (winners 3-seed eval): `metrics_summary_2026-05-21T13-19-06Z` (seed 42), `metrics_summary_2026-05-21T13-32-45Z` (seed 7), `metrics_summary_2026-05-21T13-48-17Z` (seed 1337). All gitignored.
+  - **Final numbers (mean +/- std across 3 seeds):**
+
+    | Model variant | Aggregate NDCG@10 | Cold | Heavy |
+    |---|---:|---:|---:|
+    | LightFM single-point LOO | 0.0678 +/- 0.0180 | 0.0846 +/- 0.0500 | 0.0524 +/- 0.0020 |
+    | LightFM sweep winner (same hyperparams) | 0.0631 +/- 0.0104 | 0.0803 +/- 0.0411 | 0.0516 +/- 0.0257 |
+    | ALS single-point LOO | 0.0717 +/- 0.0132 | 0.1272 +/- 0.0569 | 0.0338 +/- 0.0047 |
+    | **ALS sweep winner (reg=0.1)** | **0.0787 +/- 0.0115** | **0.1335 +/- 0.0486** | **0.0485 +/- 0.0141** |
+
+  - **Hypothesis check:**
+    - H1 (LightFM heavy hyperparam-bound to >= 0.060): REFUTED. Best LightFM heavy in the grid is 0.0359 (n128_lwarp at seed=42), worse than the single-point reference (0.0524 +/- 0.0020). LightFM heavy is at or near the model-class ceiling for this dataset.
+    - H2 (ALS cold hyperparam-bound to >= 0.150): partially confirmed at seed=42 (0.1795 > 0.150) but the 3-seed mean (0.1335) does not clear the threshold. Cold is mainly hyperparam-insensitive in this grid; ALS cold strength is structural.
+    - H3 (segment leadership preserved): YES for cold (ALS still wins 3/3); shifted for aggregate (now ALS wins 3/3, not contested); narrowed for heavy (LightFM wins 2/3 vs previous 3/3).
+  - **Decision: shipped.** All four items of this plan are DONE. The most defensible production-relevant claim is now: ALS at `factors=64, regularization=0.1` on LOO artifacts is the strongest classical-CF baseline by aggregate (3/3 seeds), and the heavy-segment gap to LightFM has narrowed to within seed variance.
 
 ## Deferred / Future (out of this plan)
 
