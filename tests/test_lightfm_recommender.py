@@ -83,6 +83,43 @@ class TestLightfmRecommender(unittest.TestCase):
         self.assertTrue(recommendations.empty)
         self.assertEqual(recommendations.columns.tolist(), BASE_OUTPUT_COLUMNS + ["similarity_score"])
 
+    def test_build_interaction_matrix_excludes_specified_pairs(self):
+        ratings = pd.DataFrame(
+            [
+                {"userId": 10, "movieId": 1, "rating": 5.0},
+                {"userId": 10, "movieId": 2, "rating": 4.5},
+                {"userId": 11, "movieId": 1, "rating": 5.0},
+                {"userId": 11, "movieId": 3, "rating": 4.0},
+            ]
+        )
+
+        interactions, user_index, item_index = build_interaction_matrix(
+            ratings,
+            positive_threshold=4.0,
+            exclude_pairs={(10, 1), (11, 3)},
+        )
+
+        self.assertEqual(interactions.nnz, 2)
+        self.assertEqual(set(user_index.keys()), {10, 11})
+        self.assertEqual(set(item_index.keys()), {1, 2})
+
+    def test_build_interaction_matrix_none_exclude_is_no_op(self):
+        ratings = pd.DataFrame(
+            [
+                {"userId": 10, "movieId": 1, "rating": 5.0},
+                {"userId": 11, "movieId": 3, "rating": 4.0},
+            ]
+        )
+
+        baseline = build_interaction_matrix(ratings, positive_threshold=4.0)
+        none_result = build_interaction_matrix(ratings, positive_threshold=4.0, exclude_pairs=None)
+        empty_result = build_interaction_matrix(ratings, positive_threshold=4.0, exclude_pairs=set())
+
+        self.assertEqual(baseline[0].nnz, none_result[0].nnz)
+        self.assertEqual(baseline[0].nnz, empty_result[0].nnz)
+        self.assertEqual(baseline[1], none_result[1])
+        self.assertEqual(baseline[1], empty_result[1])
+
 
 if __name__ == "__main__":
     unittest.main()

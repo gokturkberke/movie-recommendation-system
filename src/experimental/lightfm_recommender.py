@@ -34,7 +34,7 @@ def require_lightfm_dependency():
     return LightFM
 
 
-def build_interaction_matrix(ratings, positive_threshold=4.0):
+def build_interaction_matrix(ratings, positive_threshold=4.0, exclude_pairs=None):
     if ratings is None or ratings.empty:
         return sparse.csr_matrix((0, 0), dtype=np.float32), {}, {}
     required_columns = {"userId", "movieId", "rating"}
@@ -50,6 +50,15 @@ def build_interaction_matrix(ratings, positive_threshold=4.0):
 
     filtered["userId"] = filtered["userId"].astype(int)
     filtered["movieId"] = filtered["movieId"].astype(int)
+
+    if exclude_pairs:
+        excl_list = [(int(u), int(m)) for u, m in exclude_pairs]
+        if excl_list:
+            excl_index = pd.MultiIndex.from_tuples(excl_list)
+            filtered_index = pd.MultiIndex.from_arrays([filtered["userId"], filtered["movieId"]])
+            filtered = filtered[~filtered_index.isin(excl_index)].copy()
+            if filtered.empty:
+                return sparse.csr_matrix((0, 0), dtype=np.float32), {}, {}
     user_ids = sorted(filtered["userId"].unique().tolist())
     movie_ids = sorted(filtered["movieId"].unique().tolist())
     user_index = {int(user_id): position for position, user_id in enumerate(user_ids)}
