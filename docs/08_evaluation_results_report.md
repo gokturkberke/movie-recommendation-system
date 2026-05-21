@@ -262,11 +262,62 @@ ALS lost approximately 70% of its aggregate NDCG@10 (0.241 -> 0.072); LightFM lo
 
 The headline post-LOO: ALS still owns cold-start; LightFM owns long-history users; the middle two buckets are a tossup. This is the textbook-aligned outcome that classical CF wisdom predicted, which the leaked artifacts had concealed.
 
+## Hyperparameter sweep on LOO artifacts
+
+The 2026-05-25 audit (`docs/experiments/2026-05-25_hyperparam-sweep-loo.md`) ran a 12-artifact sweep -- LightFM over `no_components in {32, 64, 128} x loss in {warp, bpr}` (6 combos, epochs=20) and ALS over `factors in {32, 64, 128} x regularization in {0.01, 0.1}` (6 combos, alpha=40, iterations=20). Every artifact was retrained with the same 1,555-row LOO exclusion CSV used in the 2026-05-24 plan; aggregate eval ran at seed=42 with segmentation enabled. Winners were then put through a full 3-seed segmented eval.
+
+### Sweep results at seed=42 (all 12 artifacts)
+
+LightFM (sorted by aggregate NDCG@10):
+
+| Slug | Aggregate | Cold | Warm | Regular | Heavy |
+|---|---:|---:|---:|---:|---:|
+| n64_lwarp_e20 | **0.0738** | 0.1266 | 0.0801 | 0.0549 | 0.0234 |
+| n64_lbpr_e20 | 0.0727 | 0.1330 | 0.0801 | 0.0458 | 0.0259 |
+| n32_lwarp_e20 | 0.0718 | 0.1090 | 0.0767 | 0.0623 | 0.0255 |
+| n128_lwarp_e20 | 0.0711 | 0.0895 | 0.0975 | 0.0318 | 0.0359 |
+| n32_lbpr_e20 | 0.0704 | 0.1390 | 0.0792 | 0.0425 | 0.0099 |
+| n128_lbpr_e20 | 0.0700 | 0.1354 | 0.0812 | 0.0410 | 0.0066 |
+
+ALS (sorted by aggregate NDCG@10):
+
+| Slug | Aggregate | Cold | Warm | Regular | Heavy |
+|---|---:|---:|---:|---:|---:|
+| f64_r0.1_a40_i20 | **0.0919** | 0.1795 | 0.0844 | 0.0764 | 0.0396 |
+| f64_r0.01_a40_i20 | 0.0886 | 0.1787 | 0.0848 | 0.0765 | 0.0113 |
+| f128_r0.01_a40_i20 | 0.0835 | 0.1732 | 0.0837 | 0.0590 | 0.0192 |
+| f128_r0.1_a40_i20 | 0.0808 | 0.1580 | 0.0886 | 0.0481 | 0.0236 |
+| f32_r0.01_a40_i20 | 0.0775 | 0.1720 | 0.0823 | 0.0371 | 0.0260 |
+| f32_r0.1_a40_i20 | 0.0722 | 0.1551 | 0.0708 | 0.0496 | 0.0190 |
+
+The cleanest hyperparam win is ALS `regularization=0.1` over `0.01` at `factors=64`: aggregate NDCG@10 rises +3.7% (0.0886 -> 0.0919) and the heavy-segment number jumps ~3.5x (0.0113 -> 0.0396) at the single seed. For LightFM the best aggregate is exactly the baseline shape (`n64_lwarp`, 0.0738); BPR never beats WARP at the same `no_components`. Cold-start lead stays with ALS in every combo (best ALS cold 0.1795 vs best LightFM cold 0.1390).
+
+### Winners vs single-point LOO at 3 seeds
+
+The top-1 LightFM (`n64_lwarp_e20`) and top-1 ALS (`f64_r0.1_a40_i20`) were run through the full 9-model 3-seed segmented eval. Entries below are mean +/- std across seeds {42, 7, 1337}.
+
+| Model + variant | Aggregate NDCG@10 | Cold NDCG@10 | Heavy NDCG@10 |
+|---|---:|---:|---:|
+| LightFM single-point LOO (n64_lwarp, original train) | 0.0678 +/- 0.0180 | 0.0846 +/- 0.0500 | 0.0524 +/- 0.0020 |
+| LightFM sweep winner (n64_lwarp, fresh train) | 0.0631 +/- 0.0104 | 0.0803 +/- 0.0411 | 0.0516 +/- 0.0257 |
+| ALS single-point LOO (f64_r0.01) | 0.0717 +/- 0.0132 | 0.1272 +/- 0.0569 | 0.0338 +/- 0.0047 |
+| ALS sweep winner (f64_r0.1) | **0.0787 +/- 0.0115** | 0.1335 +/- 0.0486 | **0.0485 +/- 0.0141** |
+
+For LightFM the two rows have the same hyperparameters; the gap (0.0678 vs 0.0631 aggregate) measures the training-noise floor at WARP / `no_components=64`, since `train_lightfm_model.py` does not plumb a `random_state` and each retrain reseeds internally. The 0.0047 gap is inside the std band -- no meaningful tuning gain for LightFM in the swept grid.
+
+For ALS the regularization=0.1 winner lifts aggregate NDCG@10 by +0.0070 (+10%), heavy-segment NDCG@10 by +0.0147 (+43%), and pulls cold NDCG@10 up by +0.0063. Per-seed: tuned ALS beats single-point ALS on aggregate in 3 of 3 seeds; on heavy in 3 of 3 seeds. This is a real, seed-robust hyperparam gain.
+
+### Updated per-seed leaderboard with tuned ALS
+
+Per-seed heavy-segment NDCG@10 (tuned ALS vs sweep-winner LightFM): seed 42 -> ALS 0.0396 vs LightFM 0.0234 (ALS); seed 7 -> ALS 0.0647 vs LightFM 0.0735 (LightFM); seed 1337 -> ALS 0.0411 vs LightFM 0.0579 (LightFM). LightFM still wins heavy in 2 of 3 seeds, but the gap has shrunk: pre-sweep ALS heavy was 0.034 vs LightFM 0.052 (clear LightFM lead); post-sweep ALS heavy is 0.049 vs LightFM 0.052 (within one std). On the aggregate, tuned ALS now beats LightFM in 3 of 3 seeds.
+
+The hyperparameter pass tightens the 2026-05-24 leaderboard. ALS keeps cold ownership and now reclaims aggregate leadership decisively; LightFM's heavy advantage narrows from "clear" to "marginal within seed variance".
+
 ## Conclusions
 
 - The evaluation flow covers 9 top-N models. The ALS exclusion-semantics fix from `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` item 2 is applied in every run.
-- `als_implicit` leads on the **leaked-artifact** baselines (every shape and every segment in the original 2026-05-22 / 2026-05-23 runs) but **not** under the leakage-corrected runs. After leave-one-out retraining, ALS aggregate NDCG@10 falls to 0.0717 +/- 0.0132 (was 0.2409), LightFM to 0.0678 +/- 0.0180 (was 0.1237), and the two are within one standard deviation of each other at the aggregate level. ALS stays ~7 ms latency in both regimes.
-- Per-segment under LOO, the leaderboard becomes segment-dependent: ALS still owns `cold_0_10` (3 of 3 seeds); LightFM owns `heavy_200_plus` (3 of 3 seeds, mean 0.0524 vs ALS 0.0338); the middle two buckets (`warm_10_50`, `regular_50_200`) are mixed within seed variance. This is the textbook-aligned outcome that the leaked artifacts had concealed.
+- `als_implicit` leads on the **leaked-artifact** baselines (every shape and every segment in the original 2026-05-22 / 2026-05-23 runs) but the picture shifts twice under correction. (a) Under LOO at single-point hyperparameters, ALS aggregate NDCG@10 falls to 0.0717 +/- 0.0132 and LightFM to 0.0678 +/- 0.0180 -- within one std at the aggregate. (b) Under LOO plus the hyperparameter sweep, ALS at `factors=64, regularization=0.1` lifts aggregate NDCG@10 to 0.0787 +/- 0.0115 and beats LightFM on aggregate in 3 of 3 seeds. ALS stays ~7 ms latency throughout.
+- Per-segment under LOO + sweep, the leaderboard is: ALS owns `cold_0_10` (3 of 3 seeds, ~0.13 mean); ALS owns aggregate; LightFM still owns `heavy_200_plus` but only in 2 of 3 seeds (0.052 vs 0.049 mean -- within one std now versus a clear gap pre-sweep); the middle two buckets remain mixed within seed variance.
 - The third-rank position is **not stable** and depends on the segment: `popularity` is third in the cold and warm buckets under both leaked and LOO; `tfidf_content` is third in regular under leaked; `sbert_faiss_content` rises near the top of `heavy_200_plus` once ALS / LightFM are leakage-corrected.
 - Among classical CF: ALS > LightFM > SVD top-K on NDCG@10 and on mean latency, on every studied shape.
 - `svd_topk` produces zero hits at K=10 on the small canonical slice and a small non-zero band at K=20 and at 300 users; the "Why SVD top-K stays at zero hits" subsection above explains this as an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
@@ -279,6 +330,7 @@ The headline post-LOO: ALS still owns cold-start; LightFM owns long-history user
 - The canonical K=10 / K=20 tables at the top of this report come from a single 100-user deterministic-first-N latest-1 slice (run id `2026-05-20T18-47-21Z`). The Variance Bounds subsection covers seven additional runs across two slice sizes, two holdout shapes, and three seeds.
 - 55 of the 100 selected users had positive holdout items in the canonical run; the multi-seed 100-user runs landed at 54 / 52 / 54.
 - The holdout=3 expansion changes recall semantics: each user has three positive items in the denominator, capped at 1.0. Recall values across `holdout=1` and `holdout=3` runs are not directly comparable; the variance subsection treats them as separate tables.
-- The training-set leakage caveat is now **measured rather than open**. The canonical K=10 / K=20 tables and the Variance Bounds / Cold-start segmentation subsections all use the leaked artifacts at `artifacts/models/{lightfm,als}/`; the absolute NDCG numbers there are inflated (ALS by ~70%, LightFM by ~45% at the 300u/h=3 shape). The Leakage-corrected subsection above provides the deflated reference. Forward-looking quality claims should rely on the LOO numbers, not the leaked ones.
+- The training-set leakage caveat is now **measured rather than open**. The canonical K=10 / K=20 tables and the Variance Bounds / Cold-start segmentation subsections all use the leaked artifacts at `artifacts/models/{lightfm,als}/`; the absolute NDCG numbers there are inflated (ALS by ~70%, LightFM by ~45% at the 300u/h=3 shape). The Leakage-corrected and Hyperparameter sweep subsections above provide the deflated reference. Forward-looking quality claims should rely on the tuned LOO numbers (ALS f64_r0.1 aggregate 0.0787 +/- 0.0115, LightFM n64_lwarp 0.0631 +/- 0.0104), not the leaked ones.
+- LightFM training is stochastic (the train script does not plumb a `random_state` to `LightFM.__init__`), so reruns at the same hyperparameters drift by roughly +/- 0.0145 NDCG@10. The reported LightFM numbers should be read with that noise floor in mind. ALS is more deterministic (drift ~0.003).
 - The cold-start segmentation per-bucket sample sizes are small (cold ~44, warm ~111, regular ~69, heavy ~32 users per seed). Per-segment orderings are directionally informative across 3 seeds but should not be reported as definitive without a larger eval slice or a leave-one-out comparison.
 - Generated artifacts are intentionally local and should be regenerated when code or data changes.
