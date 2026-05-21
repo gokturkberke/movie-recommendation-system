@@ -103,7 +103,27 @@ Corresponding audit item: 2026-05-24 plan's open question ("are the LOO heavy an
   - Spot-check three random combos: `cat artifacts/sweeps/{slug}/metadata.json | jq` shows the matching hyperparameters and `excluded_pair_count=1555`.
   - DONE marker records wall time per combo (median, total) and the manifest path.
 - **Expected outcome:** 12 leakage-corrected artifacts ready for sweep eval. Decision criterion: manifest row count and metadata correctness pass.
-- **DONE / DROPPED:**
+- **DONE (commit pending; this is doc-only):** Ran the LightFM and ALS sweeps back-to-back via the driver. 12 artifacts produced; `artifacts/sweeps/sweep_manifest.csv` has 13 lines (1 header + 12 rows). Every artifact's `metadata.json` carries `excluded_pair_count=1555` and `row_count=16,861,498` -- proving the LOO exclusion was applied uniformly.
+  - Total wall time ~96 minutes (longer than the 50-60 min estimate; BPR loss made LightFM training meaningfully slower than WARP):
+
+    | Artifact | Train seconds | Notes |
+    |---|---:|---|
+    | lightfm_n32_lwarp_e20_t1 | 285.9 | fastest LightFM |
+    | lightfm_n32_lbpr_e20_t1 | 660.9 | |
+    | lightfm_n64_lwarp_e20_t1 | 456.9 | matches 2026-05-24 single-point baseline shape |
+    | lightfm_n64_lbpr_e20_t1 | 1088.1 | |
+    | lightfm_n128_lwarp_e20_t1 | 655.2 | |
+    | lightfm_n128_lbpr_e20_t1 | 1927.0 | slowest combo by far |
+    | als_f32_r0.01_a40_i20 | 61.7 | |
+    | als_f32_r0.1_a40_i20 | 61.8 | |
+    | als_f64_r0.01_a40_i20 | 93.1 | matches 2026-05-24 single-point baseline shape |
+    | als_f64_r0.1_a40_i20 | 93.0 | |
+    | als_f128_r0.01_a40_i20 | 188.6 | |
+    | als_f128_r0.1_a40_i20 | 188.7 | |
+
+    - Observations: BPR loss roughly doubles LightFM training time vs WARP at the same `no_components`. ALS regularization has effectively zero impact on training time (61.7 vs 61.8 etc.) -- the regularization variant is computed during the same SGD pass. ALS scales sub-linearly with `factors` for this dataset (32 -> 62s, 64 -> 93s, 128 -> 189s).
+  - Manifest path: `artifacts/sweeps/sweep_manifest.csv` (gitignored).
+  - Decision: proceed to Item 3 (lightweight per-artifact eval).
 
 ## 3) Lightweight per-artifact eval
 
