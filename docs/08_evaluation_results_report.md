@@ -223,18 +223,55 @@ Building on the 300-user / holdout=3 multi-seed runs above, `docs/experiments/20
 
 **Who wins each segment.** `als_implicit > lightfm_warp` in every segment in 3 of 3 seeds (12 of 12 segment-seed cells). The third-rank position is segment-dependent: `popularity` is third in cold; `popularity` and `hybrid_content` tie within one std in warm; `tfidf_content` rises to third in regular; `sbert_faiss_content` rises to third in heavy. So the "third spot is a tossup" finding from the Variance Bounds section above sharpens here -- the actual third-place model **changes by user-history bucket**.
 
-**Why both CF models invert classical wisdom (the leakage signature).** Textbook expectation is that ALS and LightFM are weak at cold-start and strong on heavy users (where they have the most behavior signal). The opposite happens here: both models' NDCG@10 falls monotonically from cold to heavy (ALS 0.46 -> 0.07; LightFM 0.27 -> 0.04). The most likely explanation is the artifact-level training-set leakage already noted in the Caveats: both artifacts were trained on the full rating matrix including each eval user's holdout interactions. For cold users, their "true" preference signal lives almost entirely in the holdout, so the artifact has effectively memorized exactly the items the eval will hold out. For heavy users, the holdout is a smaller fraction of their full history and there is more diversity in the remaining behavior, so the memorization advantage shrinks. This makes the segmented orderings defensible -- both models share the leakage symmetrically -- but the absolute cold-start numbers are inflated. A leave-one-out retrain (logged in the audit plan's Deferred section) is the right next step before quoting these absolute numbers in any external setting.
+**Why both CF models invert classical wisdom (the leakage signature).** Textbook expectation is that ALS and LightFM are weak at cold-start and strong on heavy users (where they have the most behavior signal). The opposite happens here: both models' NDCG@10 falls monotonically from cold to heavy (ALS 0.46 -> 0.07; LightFM 0.27 -> 0.04). The most likely explanation is the artifact-level training-set leakage that prior plans noted in Caveats: both artifacts were trained on the full rating matrix including each eval user's holdout interactions. For cold users, their "true" preference signal lives almost entirely in the holdout, so the artifact has effectively memorized exactly the items the eval will hold out. The "Leakage-corrected (leave-one-out) re-evaluation" subsection below measures the size of this effect directly.
+
+## Leakage-corrected (leave-one-out) re-evaluation
+
+The 2026-05-24 audit (`docs/experiments/2026-05-24_leave-one-out-leakage-fix.md`) retrained both classical CF artifacts with the union of holdout `(userId, movieId)` pairs across seeds {42, 7, 1337} removed from the training matrix -- 1,555 pairs total. The leaked artifacts at `artifacts/models/{lightfm,als}/` were untouched; the leakage-corrected pair lives at `artifacts/models/{lightfm,als}_loo/`. All three 300u/h=3 segmented seeds were re-run against the LOO artifacts. Numbers below are `mean +/- std` across the 3 seeds.
+
+**Sanity check.** Every deterministic non-CF baseline (popularity, tfidf_content, hybrid_content, sbert_faiss_content, semantic_content, svd_topk, random) returns NDCG@10 identical to its leaked-run value at the same seed. Only `als_implicit` and `lightfm_warp` shift. This isolates the leakage effect to exactly the two artifacts that were retrained.
+
+### Aggregate NDCG@10 / HitRate@10 at 300u/h=3
+
+| Model | NDCG@10 leaked | NDCG@10 LOO | HitRate@10 leaked | HitRate@10 LOO |
+|---|---:|---:|---:|---:|
+| als_implicit | 0.2409 +/- 0.0299 | **0.0717 +/- 0.0132** | 0.4996 +/- 0.0560 | 0.2170 +/- 0.0363 |
+| lightfm_warp | 0.1237 +/- 0.0188 | **0.0678 +/- 0.0180** | 0.3133 +/- 0.0505 | 0.1788 +/- 0.0516 |
+| hybrid_content | 0.0325 +/- 0.0082 | 0.0325 +/- 0.0082 | 0.0965 +/- 0.0317 | 0.0965 +/- 0.0317 |
+| popularity | 0.0416 +/- 0.0065 | 0.0416 +/- 0.0065 | 0.1144 +/- 0.0115 | 0.1144 +/- 0.0115 |
+
+ALS lost approximately 70% of its aggregate NDCG@10 (0.241 -> 0.072); LightFM lost approximately 45% (0.124 -> 0.068). The asymmetry says ALS was the bigger beneficiary of the training-set leakage. At the aggregate level the two CF models are now within one standard deviation of each other, and at seed 42 specifically, LightFM LOO (0.0883) very slightly beats ALS LOO (0.0863). The previous canonical statement that "ALS leads on every studied shape" is no longer supported once the leakage is removed.
+
+### Per-segment NDCG@10 for ALS and LightFM
+
+| Segment | ALS leaked | ALS LOO | LightFM leaked | LightFM LOO |
+|---|---:|---:|---:|---:|
+| cold_0_10 | 0.4610 +/- 0.0743 | 0.1272 +/- 0.0569 | 0.2701 +/- 0.0378 | 0.0846 +/- 0.0500 |
+| warm_10_50 | 0.2820 +/- 0.0618 | 0.0700 +/- 0.0112 | 0.1328 +/- 0.0308 | 0.0740 +/- 0.0181 |
+| regular_50_200 | 0.1174 +/- 0.0442 | 0.0579 +/- 0.0009 | 0.0562 +/- 0.0154 | 0.0549 +/- 0.0096 |
+| heavy_200_plus | 0.0663 +/- 0.0364 | 0.0338 +/- 0.0047 | 0.0362 +/- 0.0072 | **0.0524 +/- 0.0020** |
+
+**How much of the cold inflation was leakage.** For ALS, cold lost 72% of its leaked NDCG@10 (0.461 -> 0.127); warm lost 75%; regular lost 51%; heavy lost 49%. For LightFM the cold loss is 69%; warm 44%; regular ~3%; heavy actually **rose** by 45% (0.036 -> 0.052) because the tighter LOO training matrix removed some noisy positives that were dragging the heavy-user signal down. The cold > heavy NDCG inversion attenuates but does not fully flip: for ALS the cold-to-heavy ratio drops from 6.96x leaked to 3.76x LOO; for LightFM it drops from 7.46x leaked to 1.62x LOO -- essentially flat.
+
+**The corrected leaderboard is segment-dependent.** Under LOO at 300u/h=3:
+
+- `cold_0_10`: ALS leads in 3 of 3 seeds. The "ALS is the cold-start king" finding survives the correction (the absolute numbers shrink, but the relative gap to LightFM holds).
+- `warm_10_50`: LightFM leads in 2 of 3 seeds (42 and 1337); ALS leads in 1 (seed 7).
+- `regular_50_200`: ALS leads in 2 of 3 seeds (7 and 1337); LightFM leads in 1 (seed 42). Mixed -- within seed variance.
+- `heavy_200_plus`: **LightFM leads in 3 of 3 seeds** with a comfortable margin (LightFM 0.0524 +/- 0.0020 vs ALS 0.0338 +/- 0.0047).
+
+The headline post-LOO: ALS still owns cold-start; LightFM owns long-history users; the middle two buckets are a tossup. This is the textbook-aligned outcome that classical CF wisdom predicted, which the leaked artifacts had concealed.
 
 ## Conclusions
 
 - The evaluation flow covers 9 top-N models. The ALS exclusion-semantics fix from `docs/experiments/2026-05-21_als-svd-zero-hit-investigation.md` item 2 is applied in every run.
-- `als_implicit` is the leading ranker on every studied shape **and on every user-history segment**. It tops the canonical 100-user latest-1 slice, the 100-user multi-seed runs at holdout=1 (3 of 3 seeds), the 300-user single-seed run, the 300-user multi-seed runs at holdout=3 (3 of 3 seeds), and the per-segment partition of the 300u/h=3 runs (12 of 12 segment-seed cells). It is simultaneously the fastest model at ~7 ms mean latency.
-- `lightfm_warp` is the runner-up on every shape and every segment. The gap to ALS is wide (ALS NDCG@10 ~1.7-2.1x LightFM across slices and segments). Latency stays in the ~40 ms fast tier.
-- The third-rank position is **not stable** and depends on the segment: `popularity` is third in the cold and warm buckets; `tfidf_content` is third in regular; `sbert_faiss_content` is third in heavy. The single "third-best" label from the original canonical table is misleading -- the actual third-place model changes with user-history size.
+- `als_implicit` leads on the **leaked-artifact** baselines (every shape and every segment in the original 2026-05-22 / 2026-05-23 runs) but **not** under the leakage-corrected runs. After leave-one-out retraining, ALS aggregate NDCG@10 falls to 0.0717 +/- 0.0132 (was 0.2409), LightFM to 0.0678 +/- 0.0180 (was 0.1237), and the two are within one standard deviation of each other at the aggregate level. ALS stays ~7 ms latency in both regimes.
+- Per-segment under LOO, the leaderboard becomes segment-dependent: ALS still owns `cold_0_10` (3 of 3 seeds); LightFM owns `heavy_200_plus` (3 of 3 seeds, mean 0.0524 vs ALS 0.0338); the middle two buckets (`warm_10_50`, `regular_50_200`) are mixed within seed variance. This is the textbook-aligned outcome that the leaked artifacts had concealed.
+- The third-rank position is **not stable** and depends on the segment: `popularity` is third in the cold and warm buckets under both leaked and LOO; `tfidf_content` is third in regular under leaked; `sbert_faiss_content` rises near the top of `heavy_200_plus` once ALS / LightFM are leakage-corrected.
 - Among classical CF: ALS > LightFM > SVD top-K on NDCG@10 and on mean latency, on every studied shape.
 - `svd_topk` produces zero hits at K=10 on the small canonical slice and a small non-zero band at K=20 and at 300 users; the "Why SVD top-K stays at zero hits" subsection above explains this as an expected algorithmic limitation of RMSE-trained Surprise SVD, not a wiring bug.
 - SVD rating prediction works and has RMSE 0.7558 / MAE 0.5706 on the sampled holdout.
-- These remain local directional results. Both ALS and LightFM artifacts were trained on the full rating matrix including the eval holdout interactions; the cold-start segmentation makes this leakage visible (both classical CF models invert textbook cold-vs-heavy behavior). A tighter leave-one-out retraining is logged in the audit plans' Deferred sections and is the right next step before quoting any absolute cold-start number.
+- The previously-noted training-set leakage has now been **measured and corrected**: the "Leakage-corrected (leave-one-out) re-evaluation" subsection above quantifies its effect (ALS aggregate NDCG@10 loses ~70%; LightFM ~45%; the universal-leader claim does not survive). The corrected (LOO) results are the better basis for any forward-looking quality claim.
 
 ## Caveats
 
@@ -242,6 +279,6 @@ Building on the 300-user / holdout=3 multi-seed runs above, `docs/experiments/20
 - The canonical K=10 / K=20 tables at the top of this report come from a single 100-user deterministic-first-N latest-1 slice (run id `2026-05-20T18-47-21Z`). The Variance Bounds subsection covers seven additional runs across two slice sizes, two holdout shapes, and three seeds.
 - 55 of the 100 selected users had positive holdout items in the canonical run; the multi-seed 100-user runs landed at 54 / 52 / 54.
 - The holdout=3 expansion changes recall semantics: each user has three positive items in the denominator, capped at 1.0. Recall values across `holdout=1` and `holdout=3` runs are not directly comparable; the variance subsection treats them as separate tables.
-- Both ALS and LightFM artifacts were trained on the full rating matrix including the holdout interactions; absolute NDCG numbers are inflated to the same degree for both models, which preserves the ALS > LightFM ordering but does not establish absolute quality. The cold-start segmentation surfaces this directly: both classical CF models score highest on the bucket with the least training behavior and lowest on the bucket with the most, which is the inverse of textbook CF cold-start curves. A leave-one-out retraining is logged in the audit plans' Deferred sections.
+- The training-set leakage caveat is now **measured rather than open**. The canonical K=10 / K=20 tables and the Variance Bounds / Cold-start segmentation subsections all use the leaked artifacts at `artifacts/models/{lightfm,als}/`; the absolute NDCG numbers there are inflated (ALS by ~70%, LightFM by ~45% at the 300u/h=3 shape). The Leakage-corrected subsection above provides the deflated reference. Forward-looking quality claims should rely on the LOO numbers, not the leaked ones.
 - The cold-start segmentation per-bucket sample sizes are small (cold ~44, warm ~111, regular ~69, heavy ~32 users per seed). Per-segment orderings are directionally informative across 3 seeds but should not be reported as definitive without a larger eval slice or a leave-one-out comparison.
 - Generated artifacts are intentionally local and should be regenerated when code or data changes.
