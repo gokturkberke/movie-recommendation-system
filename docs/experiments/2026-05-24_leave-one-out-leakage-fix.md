@@ -135,7 +135,52 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Caveats block (
   - Per-seed `als_implicit.10.evaluated_user_count` equals the 2026-05-23 reference's (same eval slice, same user split).
   - DONE marker records the per-seed K=10 NDCG@10 for `als_implicit` and `lightfm_warp` aggregate and per-segment.
 - **Expected outcome:** A 3-seed LOO dataset ready for the synthesis. Decision criterion: three artifacts exist; non-CF baselines unchanged.
-- **DONE / DROPPED:**
+- **DONE (commit to be backfilled):** Ran the 9-model segmented eval three times against the LOO artifacts at `--max-users 300 --holdout-count 3 --segment-by-history --user-sample-seed` in `42, 7, 1337`. Total wall time ~38 minutes.
+  - Sanity check passed cleanly: every deterministic non-CF baseline (popularity, tfidf_content, hybrid_content, sbert_faiss_content, semantic_content, svd_topk, random) produces NDCG@10 values that are **byte-for-byte identical** to the 2026-05-23 leaked-baseline runs at the same seed. Only `als_implicit` and `lightfm_warp` shifted, which is exactly the expected behavior of swapping in LOO artifacts.
+  - **Aggregate NDCG@10 collapse:**
+
+    | seed | ALS leaked | ALS LOO | delta | LightFM leaked | LightFM LOO | delta |
+    |---:|---:|---:|---:|---:|---:|---:|
+    | 42 | 0.2731 | 0.0863 | **-0.1868** | 0.1447 | 0.0883 | -0.0564 |
+    | 7 | 0.2354 | 0.0607 | **-0.1747** | 0.1087 | 0.0548 | -0.0539 |
+    | 1337 | 0.2142 | 0.0681 | -0.1460 | 0.1176 | 0.0601 | -0.0575 |
+
+    ALS lost ~70% of its NDCG@10 across seeds; LightFM lost ~40-50%. The asymmetry says ALS was the bigger beneficiary of the leakage.
+
+  - **ALS leadership is no longer universal at the aggregate level:** at seed 42, LightFM LOO (0.0883) very slightly **beats** ALS LOO (0.0863). At seeds 7 and 1337, ALS still leads (0.0607 vs 0.0548; 0.0681 vs 0.0601) but by margins inside the seed variance band. The previous "ALS > LightFM in every shape" claim is now within noise rather than a clear gap.
+
+  - **Per-segment ALS NDCG@10 (mean across 3 seeds):**
+
+    | Segment | Leaked mean | LOO mean | delta | ratio |
+    |---|---:|---:|---:|---:|
+    | cold_0_10 | 0.4610 | 0.1272 | -0.3338 | 0.28x |
+    | warm_10_50 | 0.2820 | 0.0700 | -0.2120 | 0.25x |
+    | regular_50_200 | 0.1174 | 0.0579 | -0.0595 | 0.49x |
+    | heavy_200_plus | 0.0663 | 0.0338 | -0.0325 | 0.51x |
+
+    The cold and warm buckets lost ~72-75% of their NDCG; regular and heavy lost ~50%. The leakage was strongest exactly where cold users' "true" signal was in the holdout the artifact had memorized.
+
+  - **Per-segment LightFM NDCG@10 (mean across 3 seeds):**
+
+    | Segment | Leaked mean | LOO mean | delta | ratio |
+    |---|---:|---:|---:|---:|
+    | cold_0_10 | 0.2701 | 0.0847 | -0.1854 | 0.31x |
+    | warm_10_50 | 0.1328 | 0.0740 | -0.0588 | 0.56x |
+    | regular_50_200 | 0.0562 | 0.0549 | -0.0013 | 0.98x |
+    | heavy_200_plus | 0.0362 | 0.0524 | **+0.0162** | 1.45x |
+
+    LightFM cold loses 69% (similar to ALS). But LightFM **heavy IMPROVED** under LOO -- the LOO matrix is slightly tighter (fewer noisy positives) so the model's signal on heavy users actually got cleaner.
+
+  - **Cold > heavy inversion attenuates but does not flip.** For ALS, LOO cold-to-heavy ratio drops from 6.96x to 3.76x; still inverted versus textbook expectation, but much closer to flat. For LightFM, LOO ratio is 1.62x (was 7.46x leaked) -- nearly flat, the inversion is essentially resolved.
+
+  - **New per-segment leaderboard under LOO:**
+    - `cold_0_10`: ALS leads in 3/3 seeds.
+    - `warm_10_50`: LightFM leads in 2/3 seeds (42 and 1337); ALS leads in 1 (seed 7).
+    - `regular_50_200`: ALS leads in 2/3 seeds (7 and 1337); LightFM leads in 1 (seed 42).
+    - `heavy_200_plus`: **LightFM leads in 3/3 seeds** (0.051 / 0.055 / 0.052 vs ALS 0.031 / 0.031 / 0.039).
+
+  - Run ids: `metrics_summary_2026-05-21T07-58-22Z` (seed 42), `metrics_summary_2026-05-21T08-11-13Z` (seed 7), `metrics_summary_2026-05-21T08-25-04Z` (seed 1337). All gitignored.
+  - Decision: proceed to Item 4. The synthesis needs to clearly restate the conclusion: ALS is the cold-start leader but **not** the universal leader once leakage is removed; LightFM is more robust on long-history users.
 
 ## 4) Synthesis: "Leakage-corrected (leave-one-out) re-evaluation" subsection
 
