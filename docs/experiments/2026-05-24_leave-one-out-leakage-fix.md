@@ -79,7 +79,32 @@ Corresponding audit item: `docs/08_evaluation_results_report.md` Caveats block (
   - `row_count` of each LOO artifact is strictly less than the leaked baseline's `row_count` by exactly the excluded-pair count (after threshold filtering).
   - The DONE marker records: row_count_leaked, row_count_loo, excluded_pair_count, train_seconds for each model.
 - **Expected outcome:** Leakage-corrected artifacts on disk, ready for re-evaluation. Decision criterion: artifact files exist, metadata is internally consistent, row counts shift as expected.
-- **DONE / DROPPED:**
+- **DONE (commit `df131f5`):** Added `scripts/extract_holdout_pairs.py` and ran the full extract + retrain pipeline.
+  - Holdout extraction across seeds {42, 7, 1337} at max_users=300, holdout_count=3, positive_threshold=4.0:
+
+    | seed | positive-holdout pairs |
+    |---:|---:|
+    | 42 | 535 |
+    | 7 | 484 |
+    | 1337 | 536 |
+    | **Union (deduplicated)** | **1555** |
+
+    The union equals the sum -- zero seed overlap because random sampling 300 users from ~300K eligible produces negligible user collisions across seeds.
+
+  - LOO artifacts vs leaked baselines:
+
+    | Field | LightFM leaked | LightFM LOO | ALS leaked | ALS LOO |
+    |---|---:|---:|---:|---:|
+    | row_count | 16,863,053 | 16,861,498 | 16,863,053 | 16,861,498 |
+    | user_count | 305,098 | 305,087 | 305,098 | 305,087 |
+    | item_count | 40,441 | 40,440 | 40,441 | 40,440 |
+    | train_seconds | 499.2 | 406.2 | 98.2 | 92.0 |
+    | excluded_pair_count | (none) | 1,555 | (none) | 1,555 |
+
+  - `row_count` delta is exactly 1555 for both models (matches the excluded count). `user_count` drops by 11 -- those users had ALL their `>=4.0` ratings in the eval holdout, so the LOO matrix has zero training rows for them. `item_count` drops by 1 -- one movie had no remaining `>=4.0` ratings after exclusion. This is the expected leave-one-out behavior.
+  - Holdout CSV: `artifacts/holdouts/2026-05-23_300u_h3_seeds_42_7_1337.csv` (1555 rows + header, gitignored).
+  - Leaked baseline artifacts at `artifacts/models/{lightfm,als}/` were not modified.
+  - Decision: proceed to Item 3 (re-run 3-seed segmented eval against the LOO artifacts).
 
 ## 3) Re-run 3-seed segmented eval against the LOO artifacts
 
