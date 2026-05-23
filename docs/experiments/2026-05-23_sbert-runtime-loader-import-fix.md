@@ -24,4 +24,15 @@
   - Load the existing real index through `.venv/bin/python` and verify its metadata reports 79,477 rows and 384-dimensional embeddings.
   - Start Streamlit with file watching enabled and select the SBERT path; recommendations must still work and the prior missing-`torchvision` watcher traceback sequence must not appear.
 - **Expected outcome:** Runtime index loading no longer imports `sentence_transformers` or `transformers`; SBERT artifact build behavior, artifact shapes, application UI, and recommendation output contracts remain unchanged.
-- **DONE / DROPPED:**
+- **DONE (commit `6db609c`):** Split FAISS-only runtime loading from the embedding-build dependency path and added regression coverage proving a prebuilt index can load without `sentence_transformers`. The application still renders SBERT recommendations from the existing full-catalog index with Streamlit file watching enabled.
+  - Metric / result:
+    | Check | Before | After |
+    |---|---|---|
+    | Prebuilt index load imports `sentence_transformers` | `True` | `False` |
+    | Prebuilt index load imports `transformers` | `True` | `False` |
+    | Real index shape | `79477 x 384` | `79477 x 384` |
+    | Focused SBERT tests | `2` existing tests | `3/3 OK` |
+    | Full unit suite | `73` existing tests | `74/74 OK` |
+  - Run id: N/A (runtime bugfix); validated against local `artifacts/indexes/sbert_faiss/metadata.json` from the full-catalog SBERT run.
+  - Sweep JSON: Not applicable.
+  - Decision: Shipped; keep Streamlit watcher enabled and do not add `torchvision` for the text-only runtime path.
