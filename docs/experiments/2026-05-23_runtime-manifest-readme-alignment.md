@@ -27,4 +27,15 @@
   - Run `.venv/bin/python -m pip check` and `.venv/bin/python -m unittest discover -s tests`.
   - Start the app using `.venv/bin/python -m streamlit run src/app.py` and confirm the Content-Based page renders.
 - **Expected outcome:** Supported package-install paths and documented startup commands agree with each other while product behavior, artifacts, and configuration remain unchanged.
-- **DONE / DROPPED:**
+- **DONE (commit `aa926ba`):** Aligned editable-install metadata with the supported offline evaluation dependency set and standardized documented Streamlit startup on the Python-module invocation. No runtime code, recommendation behavior, artifacts, configuration, or `requirements.txt` changed.
+  - Metric / result:
+    | Check | Before | After |
+    |---|---|---|
+    | Dependencies present only in `requirements.txt` | `lightfm`, `implicit` | None |
+    | Stale documented console-script launcher references | 4 | 0 |
+    | Editable metadata includes SBERT / FAISS / LightFM / Implicit | No | Yes |
+    | Unit suite | Not rerun for this change | `74/74 OK` |
+  - Run id: N/A (packaging and documentation consistency correction).
+  - Sweep JSON: Not applicable.
+  - Verification: `pip check` reported no broken requirements; the newly documented Streamlit command rendered the Content-Based landing screen.
+  - Decision: Shipped; retain `requirements.txt` as canonical and use `.venv/bin/python -m streamlit run src/app.py` as the documented application command.
