@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
         "initial_candidate_pool_size": 300,
         "content_candidate_pool_size": 100,
         "bayesian_min_ratings": 100,
+        "mood_min_bayesian_rating": 3.0,
         "hybrid_weights": {
             "content_similarity": 0.60,
             "bayesian_rating": 0.25,
@@ -153,6 +154,7 @@ MOOD_GENRE_MAP = config_value(["mood_genre_map"], {})
 INITIAL_CANDIDATE_POOL_SIZE = int(config_value(["recommendations", "initial_candidate_pool_size"], 300))
 CONTENT_CANDIDATE_POOL_SIZE = int(config_value(["recommendations", "content_candidate_pool_size"], 100))
 BAYESIAN_MIN_RATINGS = int(config_value(["recommendations", "bayesian_min_ratings"], 100))
+MOOD_MIN_BAYESIAN_RATING = float(config_value(["recommendations", "mood_min_bayesian_rating"], 3.0))
 HYBRID_WEIGHTS = config_value(["recommendations", "hybrid_weights"], {})
 WATCH_HISTORY_WEIGHTS = config_value(["recommendations", "watch_history_weights"], {})
 TMDB_TIMEOUT = int(config_value(["tmdb", "timeout_seconds"], 8))

@@ -480,6 +480,45 @@ class TestMovieRecommendations(unittest.TestCase):
         for genres in recommendations["genres"]:
             self.assertTrue(any(genre in genres for genre in ["Comedy", "Family", "Animation", "Romance"]))
 
+    def test_mood_excludes_low_bayesian_rating(self):
+        movie_stats = pd.DataFrame(
+            [
+                {"movieId": 1, "bayesian_rating": 2.0},
+                {"movieId": 2, "bayesian_rating": 4.5},
+            ]
+        )
+
+        recommendations = recommend_by_mood(
+            "happy",
+            self.movies.head(2),
+            watched_movie_ids=set(),
+            top_n=2,
+            movie_stats=movie_stats,
+            min_bayesian_rating=3.0,
+        )
+
+        self.assertIn(2, recommendations["movieId"].tolist())
+        self.assertNotIn(1, recommendations["movieId"].tolist())
+
+    def test_mood_falls_back_when_quality_filter_empties_pool(self):
+        movie_stats = pd.DataFrame(
+            [
+                {"movieId": 1, "bayesian_rating": 2.0},
+                {"movieId": 2, "bayesian_rating": 2.5},
+            ]
+        )
+
+        recommendations = recommend_by_mood(
+            "happy",
+            self.movies.head(2),
+            watched_movie_ids=set(),
+            top_n=2,
+            movie_stats=movie_stats,
+            min_bayesian_rating=4.0,
+        )
+
+        self.assertFalse(recommendations.empty)
+
     def test_movie_stats_build_bayesian_and_popularity_signals(self):
         ratings = pd.DataFrame(
             [
@@ -824,6 +863,38 @@ class TestMovieRecommendations(unittest.TestCase):
         movie = pick_random_movie(self.movies, selected_genres=["Documentary"])
 
         self.assertIsNone(movie)
+
+    def test_random_movie_excludes_watched(self):
+        comedy_movies = self.movies.head(2)
+        for _ in range(10):
+            movie = pick_random_movie(
+                comedy_movies,
+                selected_genres=None,
+                watched_movie_ids={1},
+            )
+            self.assertIsNotNone(movie)
+            self.assertEqual(int(movie["movieId"]), 2)
+
+    def test_random_movie_returns_none_when_all_watched(self):
+        movie = pick_random_movie(
+            self.movies.head(2),
+            selected_genres=None,
+            watched_movie_ids={1, 2},
+        )
+        self.assertIsNone(movie)
+
+    def test_render_movie_signature_accepts_reason(self):
+        import inspect
+
+        from app import render_movie, render_movie_list
+
+        movie_sig = inspect.signature(render_movie)
+        self.assertIn("reason", movie_sig.parameters)
+        self.assertIsNone(movie_sig.parameters["reason"].default)
+
+        list_sig = inspect.signature(render_movie_list)
+        self.assertIn("reasons", list_sig.parameters)
+        self.assertIsNone(list_sig.parameters["reasons"].default)
 
     def test_app_import_smoke(self):
         import app  # noqa: F401

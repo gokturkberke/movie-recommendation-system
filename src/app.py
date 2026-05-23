@@ -6,6 +6,7 @@ from config import (
     EVALUATION_DEFAULTS,
     MENU_ITEMS,
     MOOD_GENRE_MAP,
+    MOOD_MIN_BAYESIAN_RATING,
     get_tmdb_api_key,
     project_path,
 )
@@ -95,12 +96,14 @@ def explain(text):
     st.caption(text)
 
 
-def render_movie(row, index, links_df, tmdb_api_key, show_score=False):
+def render_movie(row, index, links_df, tmdb_api_key, show_score=False, reason=None):
     title = row.get("title", "Title not available")
     genres = row.get("genres", "Genres not available")
 
     st.subheader(f"{index}. {title}")
     st.write(f"**Genres:** {genres}")
+    if reason:
+        st.caption(f"Why: {reason}")
     if show_score and pd.notna(row.get("predicted_score", pd.NA)):
         st.caption(f"Predicted rating: {row.get('predicted_score'):.2f}")
 
@@ -136,14 +139,15 @@ def render_movie(row, index, links_df, tmdb_api_key, show_score=False):
     st.markdown("---")
 
 
-def render_movie_list(recommendations, links_df, tmdb_api_key, show_score=False):
+def render_movie_list(recommendations, links_df, tmdb_api_key, show_score=False, reasons=None):
     if recommendations.empty:
         st.warning("No recommendations found.")
         return
 
     with st.expander("See Recommendations", expanded=True):
         for index, (_, row) in enumerate(recommendations.reset_index(drop=True).iterrows(), start=1):
-            render_movie(row, index, links_df, tmdb_api_key, show_score=show_score)
+            reason = reasons[index - 1] if reasons is not None and index - 1 < len(reasons) else None
+            render_movie(row, index, links_df, tmdb_api_key, show_score=show_score, reason=reason)
 
 
 def render_content_based_page(context):
@@ -336,17 +340,29 @@ def render_mood_page(context):
     st.success("**Mood-Based Recommendation**")
     explain("Maps your selected mood to genres, filters the movie pool, and samples unseen titles.")
 
-    mood = st.selectbox("Select your mood:", list(MOOD_GENRE_MAP.keys()), key="mood_select")
+    mood_keys = list(MOOD_GENRE_MAP.keys())
+    mood = st.selectbox(
+        "Select your mood:",
+        mood_keys,
+        format_func=lambda key: f"{key.capitalize()} ({', '.join(MOOD_GENRE_MAP[key])})",
+        key="mood_select",
+    )
     if not st.button("Get Mood-Based Recommendations", key="mood_get_recommendations"):
         return
 
+    movie_stats = cached_movie_stats()
     recommendations = recommend_by_mood(
         mood,
         context["movies"],
         watched_movie_ids=st.session_state.watched_movie_ids,
         top_n=10,
+        movie_stats=movie_stats,
+        min_bayesian_rating=MOOD_MIN_BAYESIAN_RATING,
     )
-    render_movie_list(recommendations, context["links"], context["tmdb_api_key"])
+    mood_genres = MOOD_GENRE_MAP.get(str(mood).lower(), [])
+    reason_text = f"Mood: {mood} -> {', '.join(mood_genres)}" if mood_genres else None
+    reasons = [reason_text] * len(recommendations) if reason_text else None
+    render_movie_list(recommendations, context["links"], context["tmdb_api_key"], reasons=reasons)
 
 
 def available_genres(movies):
@@ -366,14 +382,35 @@ def render_random_page(context):
         key="random_genres",
     )
 
-    if not st.button("Pick a Random Movie", key="random_pick"):
-        return
+    if st.button("Pick a Random Movie", key="random_pick"):
+        movie = pick_random_movie(
+            context["movies"],
+            selected_genres=selected_genres,
+            watched_movie_ids=st.session_state.watched_movie_ids,
+        )
+        if movie is None:
+            st.session_state.random_pick_movie = None
+            st.warning("No unseen movie matched the current filter.")
+            return
+        st.session_state.random_pick_movie = movie.to_dict()
 
-    movie = pick_random_movie(context["movies"], selected_genres=selected_genres)
-    if movie is None:
-        st.warning("No movie matched the current filter.")
+    saved_pick = st.session_state.get("random_pick_movie")
+    if saved_pick is None:
         return
-    render_movie(movie, 1, context["links"], context["tmdb_api_key"])
+    render_movie(pd.Series(saved_pick), 1, context["links"], context["tmdb_api_key"])
+
+    if st.button("Pick Another", key="random_pick_another"):
+        movie = pick_random_movie(
+            context["movies"],
+            selected_genres=selected_genres,
+            watched_movie_ids=st.session_state.watched_movie_ids,
+        )
+        if movie is None:
+            st.session_state.random_pick_movie = None
+            st.warning("No unseen movie matched the current filter.")
+            return
+        st.session_state.random_pick_movie = movie.to_dict()
+        st.rerun()
 
 
 def render_watch_history_page(context):

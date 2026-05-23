@@ -13,7 +13,15 @@ from .common import (
 )
 
 
-def recommend_by_mood(mood, movies, watched_movie_ids=None, watched_titles=None, top_n=10):
+def recommend_by_mood(
+    mood,
+    movies,
+    watched_movie_ids=None,
+    watched_titles=None,
+    top_n=10,
+    movie_stats=None,
+    min_bayesian_rating=None,
+):
     columns = output_columns(movies)
     genres_for_mood = MOOD_GENRE_MAP.get(str(mood).lower())
     if not genres_for_mood or movies.empty:
@@ -25,6 +33,21 @@ def recommend_by_mood(mood, movies, watched_movie_ids=None, watched_titles=None,
     filtered = movies_copy[mask]
     if filtered.empty:
         return pd.DataFrame(columns=columns)
+
+    if (
+        movie_stats is not None
+        and not movie_stats.empty
+        and "movieId" in movie_stats.columns
+        and "bayesian_rating" in movie_stats.columns
+        and min_bayesian_rating is not None
+    ):
+        eligible_ids = movie_stats.loc[
+            movie_stats["bayesian_rating"] >= float(min_bayesian_rating),
+            "movieId",
+        ]
+        filtered_quality = filtered[filtered["movieId"].isin(set(eligible_ids))]
+        if not filtered_quality.empty:
+            filtered = filtered_quality
 
     watched_ids = normalize_movie_ids(watched_movie_ids)
     watched_ids.update(movie_ids_from_titles(watched_titles, movies))
