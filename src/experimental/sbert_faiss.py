@@ -25,6 +25,17 @@ class SbertFaissIndex:
     metadata: dict
 
 
+def require_faiss_dependency():
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+    try:
+        import faiss
+    except ImportError as exc:
+        raise ImportError("faiss-cpu is required for SBERT+FAISS artifacts.") from exc
+
+    return faiss
+
+
 def require_sbert_faiss_dependencies():
     os.environ.setdefault("OMP_NUM_THREADS", "1")
 
@@ -33,12 +44,7 @@ def require_sbert_faiss_dependencies():
     except ImportError as exc:
         raise ImportError("sentence-transformers is required for SBERT+FAISS artifacts.") from exc
 
-    try:
-        import faiss
-    except ImportError as exc:
-        raise ImportError("faiss-cpu is required for SBERT+FAISS artifacts.") from exc
-
-    return SentenceTransformer, faiss
+    return SentenceTransformer, require_faiss_dependency()
 
 
 def build_movie_text_corpus(movies, tags):
@@ -130,7 +136,7 @@ def build_sbert_faiss_artifacts(
 
 
 def load_sbert_faiss_index(index_dir):
-    _, faiss = require_sbert_faiss_dependencies()
+    faiss = require_faiss_dependency()
     index_path = Path(index_dir)
     faiss_path = index_path / DEFAULT_INDEX_NAME
     embeddings_path = index_path / DEFAULT_EMBEDDINGS_NAME
