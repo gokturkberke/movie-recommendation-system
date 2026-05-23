@@ -519,6 +519,44 @@ class TestMovieRecommendations(unittest.TestCase):
 
         self.assertFalse(recommendations.empty)
 
+    def test_mood_falls_back_when_only_high_rated_is_watched(self):
+        movie_stats = pd.DataFrame(
+            [
+                {"movieId": 1, "bayesian_rating": 4.5},
+                {"movieId": 2, "bayesian_rating": 2.0},
+            ]
+        )
+
+        recommendations = recommend_by_mood(
+            "happy",
+            self.movies.head(2),
+            watched_movie_ids={1},
+            top_n=2,
+            movie_stats=movie_stats,
+            min_bayesian_rating=3.0,
+        )
+
+        self.assertEqual(recommendations["movieId"].tolist(), [2])
+
+    def test_mood_prefers_high_rated_unseen_over_low_rated_unseen(self):
+        movie_stats = pd.DataFrame(
+            [
+                {"movieId": 1, "bayesian_rating": 4.5},
+                {"movieId": 2, "bayesian_rating": 2.0},
+            ]
+        )
+
+        recommendations = recommend_by_mood(
+            "happy",
+            self.movies.head(2),
+            watched_movie_ids=set(),
+            top_n=2,
+            movie_stats=movie_stats,
+            min_bayesian_rating=3.0,
+        )
+
+        self.assertEqual(recommendations["movieId"].tolist(), [1])
+
     def test_movie_stats_build_bayesian_and_popularity_signals(self):
         ratings = pd.DataFrame(
             [
@@ -880,6 +918,25 @@ class TestMovieRecommendations(unittest.TestCase):
             self.movies.head(2),
             selected_genres=None,
             watched_movie_ids={1, 2},
+        )
+        self.assertIsNone(movie)
+
+    def test_pick_random_movie_excludes_current(self):
+        for _ in range(10):
+            movie = pick_random_movie(
+                self.movies.head(2),
+                selected_genres=None,
+                excluded_movie_ids={1},
+            )
+            self.assertIsNotNone(movie)
+            self.assertEqual(int(movie["movieId"]), 2)
+
+    def test_pick_random_movie_returns_none_when_only_match_excluded(self):
+        single = self.movies.head(1)
+        movie = pick_random_movie(
+            single,
+            selected_genres=None,
+            excluded_movie_ids={1},
         )
         self.assertIsNone(movie)
 

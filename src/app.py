@@ -382,6 +382,27 @@ def render_random_page(context):
         key="random_genres",
     )
 
+    def _pick_is_still_valid(pick_dict):
+        if pick_dict is None:
+            return False
+        try:
+            pick_id = int(pick_dict.get("movieId"))
+        except (TypeError, ValueError):
+            return False
+        if pick_id in normalize_movie_ids(st.session_state.watched_movie_ids):
+            return False
+        if selected_genres:
+            pick_genres = str(pick_dict.get("genres", "") or "")
+            if not any(genre.lower() in pick_genres.lower() for genre in selected_genres):
+                return False
+        return True
+
+    saved_pick = st.session_state.get("random_pick_movie")
+    if saved_pick is not None and not _pick_is_still_valid(saved_pick):
+        st.session_state.random_pick_movie = None
+        st.caption("Previous pick was filtered out by your watch history or genre selection.")
+        saved_pick = None
+
     if st.button("Pick a Random Movie", key="random_pick"):
         movie = pick_random_movie(
             context["movies"],
@@ -393,21 +414,22 @@ def render_random_page(context):
             st.warning("No unseen movie matched the current filter.")
             return
         st.session_state.random_pick_movie = movie.to_dict()
+        saved_pick = st.session_state.random_pick_movie
 
-    saved_pick = st.session_state.get("random_pick_movie")
     if saved_pick is None:
         return
     render_movie(pd.Series(saved_pick), 1, context["links"], context["tmdb_api_key"])
 
     if st.button("Pick Another", key="random_pick_another"):
+        current_id = int(saved_pick.get("movieId"))
         movie = pick_random_movie(
             context["movies"],
             selected_genres=selected_genres,
             watched_movie_ids=st.session_state.watched_movie_ids,
+            excluded_movie_ids={current_id},
         )
         if movie is None:
-            st.session_state.random_pick_movie = None
-            st.warning("No unseen movie matched the current filter.")
+            st.warning("No other unseen movie matched the current filter.")
             return
         st.session_state.random_pick_movie = movie.to_dict()
         st.rerun()

@@ -2,10 +2,10 @@
 
 import pandas as pd
 
-from .common import filter_watched_movies
+from .common import filter_watched_movies, normalize_movie_ids
 
 
-def pick_random_movie(movies, selected_genres=None, watched_movie_ids=None):
+def pick_random_movie(movies, selected_genres=None, watched_movie_ids=None, excluded_movie_ids=None):
     if movies.empty:
         return None
 
@@ -16,7 +16,8 @@ def pick_random_movie(movies, selected_genres=None, watched_movie_ids=None):
             genre_mask |= filtered["genres"].astype(str).str.contains(genre, case=False, na=False, regex=False)
         filtered = filtered[genre_mask]
 
-    filtered = filter_watched_movies(filtered, watched_movie_ids)
+    exclude_ids = normalize_movie_ids(watched_movie_ids) | normalize_movie_ids(excluded_movie_ids)
+    filtered = filter_watched_movies(filtered, exclude_ids)
 
     if filtered.empty:
         return None

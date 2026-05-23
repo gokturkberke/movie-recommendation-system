@@ -7,6 +7,7 @@ recommendations:
   initial_candidate_pool_size: 300
   content_candidate_pool_size: 100
   bayesian_min_ratings: 100
+  # Preferred Bayesian rating for the unseen mood pool; if the threshold empties the pool, mood falls back to the unfiltered unseen pool (see docs/experiments/2026-05-23_mood-random-ux-enhancements.md)
   mood_min_bayesian_rating: 3.0
   hybrid_weights:
     content_similarity: 0.60

@@ -30,10 +30,17 @@ def recommend_by_mood(
     movies_copy = movies.copy()
     movies_copy["genres"] = movies_copy["genres"].astype(str)
     mask = movies_copy["genres"].apply(lambda genres: any(genre in genres for genre in genres_for_mood))
-    filtered = movies_copy[mask]
-    if filtered.empty:
+    genre_pool = movies_copy[mask]
+    if genre_pool.empty:
         return pd.DataFrame(columns=columns)
 
+    watched_ids = normalize_movie_ids(watched_movie_ids)
+    watched_ids.update(movie_ids_from_titles(watched_titles, movies))
+    unseen_pool = filter_watched_movies(genre_pool, watched_ids)
+    if unseen_pool.empty:
+        return pd.DataFrame(columns=columns)
+
+    sample_pool = unseen_pool
     if (
         movie_stats is not None
         and not movie_stats.empty
@@ -45,13 +52,10 @@ def recommend_by_mood(
             movie_stats["bayesian_rating"] >= float(min_bayesian_rating),
             "movieId",
         ]
-        filtered_quality = filtered[filtered["movieId"].isin(set(eligible_ids))]
-        if not filtered_quality.empty:
-            filtered = filtered_quality
+        quality_pool = unseen_pool[unseen_pool["movieId"].isin(set(eligible_ids))]
+        if not quality_pool.empty:
+            sample_pool = quality_pool
 
-    watched_ids = normalize_movie_ids(watched_movie_ids)
-    watched_ids.update(movie_ids_from_titles(watched_titles, movies))
-    sample_size = min(top_n + len(watched_ids) + 5, len(filtered))
-    recommendations = filtered.sample(n=sample_size, random_state=42)
-    recommendations = filter_watched_movies(recommendations, watched_ids)
+    sample_size = min(top_n, len(sample_pool))
+    recommendations = sample_pool.sample(n=sample_size, random_state=42)
     return ensure_output_columns(recommendations, movies).head(top_n).reset_index(drop=True)
