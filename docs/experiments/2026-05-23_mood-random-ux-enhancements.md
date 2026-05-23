@@ -105,6 +105,7 @@ The first implementation of item 5 rendered the "Pick Another" button conditiona
   - New `test_pick_random_movie_excludes_current`: a two-movie pool with the current pick excluded; ten consecutive calls always return the other id.
   - New `test_pick_random_movie_returns_none_when_only_match_excluded`: a single-movie pool with that id excluded; the call returns `None`.
 - **Expected outcome:** Pick Another is guaranteed to return a different movie when an alternative exists, or `None` when it does not.
+- **DONE (commit `9b7d876`):** Added `excluded_movie_ids` to `pick_random_movie`; unioned with `watched_movie_ids` via `normalize_movie_ids` and applied through the existing `filter_watched_movies` helper. Both new unit tests pass; `pick_random_movie(movies.head(2), excluded_movie_ids={1})` returned id 2 across 10 trials; `pick_random_movie(movies.head(1), excluded_movie_ids={1})` returned `None`.
 
 ## 8) Mood: reorder filter pipeline (watched exclusion before quality threshold)
 
@@ -119,6 +120,7 @@ The first implementation of item 5 rendered the "Pick Another" button conditiona
   - New `test_mood_prefers_high_rated_unseen_over_low_rated_unseen`: both unseen, only the high-rated one passes the threshold → result excludes the low-rated one.
   - Existing `test_mood_excludes_low_bayesian_rating` and `test_mood_falls_back_when_quality_filter_empties_pool` continue to pass (both used `watched=set()` so the reorder is behaviorally equivalent).
 - **Expected outcome:** The quality threshold is a *preference* applied over the unseen pool, never an unintended hard filter that interacts with watched exclusion to empty the result set.
+- **DONE (commit `9b7d876`):** Reordered `recommend_by_mood` to genre mask → watched exclusion → quality threshold (with fallback to unseen pool when empty) → sample. Dropped the now-redundant post-sample `filter_watched_movies` call. Added the semantic comment above `mood_min_bayesian_rating` in `config/config.yaml`. Both new unit tests pass; the previously broken scenario (high-rated watched + low-rated unseen) now returns the low-rated unseen movie via fallback rather than an empty frame.
 
 ## 9) Random: stale-pick invalidation and true re-roll wiring
 
@@ -134,6 +136,7 @@ The first implementation of item 5 rendered the "Pick Another" button conditiona
   - `test_random_pick_another_excludes_current_id`: mock `recommenders.pick_random_movie` with `side_effect=[row_a, row_b, row_b]`; click Pick → state is row_a; click Pick Another → state is row_b; the mock's second call kwargs include `excluded_movie_ids={row_a.movieId}`.
   - `test_random_pick_another_warns_when_no_alternative`: mock with `side_effect=[row_a, None]`; after Pick Another, session state still holds `row_a`, a `st.warning` containing "No other unseen movie matched" is rendered, and the mock's second call still includes `excluded_movie_ids={row_a.movieId}`.
 - **Expected outcome:** The Random page reflects the user's current filters at all times, re-roll never returns the same movie, and "no alternative" is communicated explicitly rather than by silent reuse.
+- **DONE (commit `9b7d876`):** Added `_pick_is_still_valid` inline helper to `render_random_page`; stale picks are cleared with a one-line caption. Pick Another now passes `excluded_movie_ids={current_id}` and, on `None` return, emits a warning while leaving the saved pick visible. All four AppTest scenarios pass; the no-alternative test confirmed `session_state.random_pick_movie` is preserved across the failed re-roll and the warning is rendered exactly once.
 
 ## Verification (full)
 
@@ -147,6 +150,6 @@ The first implementation of item 5 rendered the "Pick Another" button conditiona
 
 Items 1-6 landed in commit `2bf1da2` ("feat(recommendations): add mood_min_bayesian_rating and update recommendation logic") on 2026-05-23. That commit included the Pick Another visibility fix — the bug was both discovered (via the verify-phase AppTest pass) and resolved before the commit landed; only one commit was needed for items 1-6.
 
-Items 7-9 are a follow-up correction pass on items 1-6. Three items are still pending commit at the time of this update: extend `pick_random_movie` with `excluded_movie_ids`, reorder the mood pipeline so the Bayesian threshold runs over the unseen pool, and wire `render_random_page` for stale-pick invalidation, true re-roll, and explicit "no other movie" warning. The DONE markers for items 7-9 (and a matching narrative entry to this section) will be backfilled in a follow-up `docs(experiments): record items 7-9 DONE markers` commit once the implementation commit lands, mirroring the repository's existing pattern (for example commits `924ba31` and `8d19ea3`).
+Items 7-9 landed in commit `9b7d876` ("fix(recommendations): refine mood ordering and random re-roll semantics") on 2026-05-23. That commit also contained the items 1-6 DONE backfill written above and added `tests/test_app_integration.py` (force-added because `/docs` and other paths intentionally gitignored from regular commits, while this single experiment log is committed via `git add -f`). DONE markers for items 7-9 were appended in the follow-up `docs(experiments): record items 7-9 DONE markers` commit that mirrors the repository's established pattern (for example commits `924ba31` and `8d19ea3`).
 
-The implementation commit will use `git add -f docs/experiments/2026-05-23_mood-random-ux-enhancements.md` because `/docs` is gitignored. No artifact regeneration, no `requirements.txt`/`pyproject.toml` change, no SBERT loader change. Emoji policy exception remained scoped to UI strings; no emojis were introduced into code, logs, commit messages, comments, or this document.
+The implementation commits used `git add -f docs/experiments/2026-05-23_mood-random-ux-enhancements.md` because `/docs` is gitignored. No artifact regeneration, no `requirements.txt`/`pyproject.toml` change, no SBERT loader change. Emoji policy exception remained scoped to UI strings; no emojis were introduced into code, logs, commit messages, comments, or this document.
