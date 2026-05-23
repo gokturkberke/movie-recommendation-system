@@ -67,7 +67,7 @@ Future work:
 * **Machine Learning and Recommendation Algorithms:**
     * Scikit-learn (TF-IDF, Cosine Similarity)
     * Surprise (SVD algorithm, model training, and evaluation)
-    * SentenceTransformers and FAISS for the optional SBERT semantic evaluation baseline
+    * SentenceTransformers to build SBERT semantic embeddings for the app and offline baseline; FAISS to load and search the prebuilt index
     * LightFM for the optional WARP offline evaluation baseline
     * Implicit for the optional ALS offline evaluation baseline
 * **Text Similarity:** TheFuzz (FuzzyWuzzy)
@@ -122,7 +122,7 @@ Future work:
 
 7.  **Launch the Streamlit Application:**
     ```bash
-    .venv/bin/streamlit run src/app.py
+    .venv/bin/python -m streamlit run src/app.py
     ```
     The application will typically open in your web browser at `http://localhost:8501`.
 
@@ -150,7 +150,7 @@ The same script can compare every available baseline (random, popularity, pure T
 ```
 Results are written to `artifacts/evaluation/metrics_summary.{csv,json}` (gitignored). The Streamlit app is untouched.
 
-To build and evaluate the real SBERT + FAISS semantic baseline, first create the local index artifacts:
+To use the real SBERT + FAISS semantic mode in the app or offline evaluation, first create the local index artifacts:
 ```bash
 .venv/bin/python scripts/build_sbert_faiss_index.py \
   --output-dir artifacts/indexes/sbert_faiss
@@ -162,7 +162,7 @@ For a quick smoke build, add `--sample-size 1000` and write to `/private/tmp/sbe
   --include-sbert-faiss \
   --sbert-faiss-index-dir artifacts/indexes/sbert_faiss
 ```
-This is evaluation-only and does not build embeddings during Streamlit startup.
+The app and evaluation runner load these prebuilt artifacts; Streamlit startup does not build embeddings.
 
 To build and evaluate the LightFM WARP baseline, first create the local model artifacts:
 ```bash

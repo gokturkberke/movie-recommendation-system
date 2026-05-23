@@ -24,6 +24,8 @@ dependencies = [
     "PyYAML",
     "sentence-transformers",
     "faiss-cpu",
+    "lightfm",
+    "implicit",
 ]
 
 [tool.setuptools]

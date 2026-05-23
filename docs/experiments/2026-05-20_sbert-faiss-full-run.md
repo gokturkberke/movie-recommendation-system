@@ -97,7 +97,7 @@
   - Commit message: `feat(ui): add SBERT semantic mode to content-based recommendation page`.
 - **Test / verification:**
   - `.venv/bin/python -m unittest discover -s tests` passes (no test should break; the experimental module is imported lazily through `cached_sbert_index`).
-  - Manual: `.venv/bin/streamlit run src/app.py`. On the Content-Based page, the new radio appears, selecting "SBERT semantic" returns a list of 10 movies for a seed like "The Matrix", and TF-IDF mode still returns the existing hybrid output.
+  - Manual: `.venv/bin/python -m streamlit run src/app.py`. On the Content-Based page, the new radio appears, selecting "SBERT semantic" returns a list of 10 movies for a seed like "The Matrix", and TF-IDF mode still returns the existing hybrid output.
   - With `artifacts/indexes/sbert_faiss/` temporarily renamed to `_sbert_faiss_disabled`, restarting the app shows the SBERT option as disabled and a caption telling the user to run the build script. Restore the directory after the check.
 - **Expected outcome:** Streamlit users can compare the two recommenders directly on the same seed without leaving the page. Decision criterion: manual smoke shows both branches return 10 rows on a real seed; missing-artifact branch shows the disabled state without crashing.
 - **DONE (commit `ad54232`):** Added a TF-IDF / SBERT radio at the top of the Content-Based page, with a cached `cached_sbert_index()` resource that lazily imports `experimental.sbert_faiss`. Missing-artifact branch shows a graceful warning and short-circuits the page. README "Future work" no longer lists Streamlit SBERT integration.
